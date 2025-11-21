@@ -27,48 +27,43 @@ SESSION=votre_sessionid
 SIGNATURE=votre_signature
 ```
 
-## 📊 Utilisation
+## 🚀 Lancer le serveur
 
 ```bash
-npm test
+npm start
 ```
 
-Le script va :
-1. Se connecter à TradingView avec vos credentials
-2. Charger la stratégie EMA Cross + RSI
-3. Exécuter le backtest
-4. Afficher les résultats (Net Profit, % Profitable, Max Drawdown, etc.)
+Le serveur démarrera sur `http://localhost:3000`
 
-## 🔧 Personnalisation
+## 📊 Utilisation
 
-Éditez `test-strategy.js` pour :
-- Changer de symbole (BTCUSDT, ETHUSDT, etc.)
-- Modifier le timeframe (1m, 5m, 1h, D, W)
-- Tester une autre stratégie (changez `strategyCode`)
+1. **Ouvrez votre navigateur** et accédez à `http://localhost:3000`
 
-## 📈 Exemple de sortie
+2. **Sélectionnez un indicateur** :
+   - Entrez l'ID de l'indicateur (public ou privé)
+   - Cliquez sur "Fetch Options" pour charger les paramètres
 
-```
-🚀 Starting TradingView Strategy Backtester...
+3. **Configurez votre backtest** :
+   - **Symboles** : Ajoutez les symboles à tester (ex: BINANCE:BTCUSDT, NASDAQ:AAPL)
+   - **Timeframes** : Sélectionnez les périodes (1m, 5m, 15m, 4h, 1D, 1W, etc.)
+   - **Options** : Configurez les paramètres de l'indicateur
+   - **Ranges** : Définissez des plages pour tester plusieurs valeurs d'un paramètre
 
-📊 Chart: BINANCE:BTCUSDT (D)
+4. **Exécutez le backtest** :
+   - Cliquez sur "Run Backtest"
+   - Suivez la progression en temps réel
+   - Les résultats s'afficheront au fur et à mesure
 
-📝 Creating strategy indicator...
-✅ Strategy loaded successfully!
+5. **Analysez les résultats** :
+   - Cliquez sur une ligne du tableau pour voir les analytics détaillées
+   - Consultez la courbe d'équité, les métriques de performance et la liste des trades
+   - Exportez les résultats en Excel si nécessaire
 
-📈 Strategy Report:
+## ✨ Fonctionnalités
 
-Net Profit: 1234.56
-Total Closed Trades: 42
-Percent Profitable: 65.00%
-Profit Factor: 1.85
-Max Drawdown: -234.00 (-5.67%)
-
-✅ Backtest complete!
-```
-
-## 🎯 Prochaines étapes
-
-- Ajouter un optimizer de paramètres (tester automatiquement différentes valeurs d'EMA)
-- Créer un système de comparaison de stratégies
-- Générer des rapports visuels avec des graphiques
+- **Test multi-symboles et multi-timeframes** : Testez plusieurs configurations en une seule fois
+- **Optimisation par plages** : Testez automatiquement différentes valeurs de paramètres
+- **Suivi en temps réel** : Progression live via WebSocket
+- **Analytics détaillées** : Métriques complètes, graphiques d'équité, liste des trades
+- **Export Excel** : Exportez vos résultats pour analyse approfondie
+- **Sauvegarde automatique** : Vos paramètres sont sauvegardés dans le navigateur

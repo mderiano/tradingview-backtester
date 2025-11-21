@@ -83,7 +83,7 @@ function loadSettings() {
     // Default symbols if nothing saved
     const defaultSymbols = [
         'BINANCE:BTCUSDT.P', 'BINANCE:ETHUSDT.P', 'BINANCE:XRPUSDT.P',
-        'BINANCE:BNBUSDT.P', 'BINANCE:SOLUSDT.P', 'BINANCE:TRXUSDT.P', 'BINANCE:DOGEUSDT.P'
+        'BINANCE:BNBUSDT.P'
     ];
 
     if (!saved) {
