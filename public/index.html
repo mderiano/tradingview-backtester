@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TradingView Backtester</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1 id="appTitle">TradingView Backtester</h1>
+            <p id="appSubtitle">Automated strategy testing with range analysis</p>
+        </header>
+
+        <main>
+            <!-- Step 1: Indicator Selection -->
+            <section class="card" id="step1">
+                <h2>Select Indicator</h2>
+                <div class="input-group">
+                    <label for="indicatorId">Indicator ID (Public or Private)</label>
+                    <div class="row">
+                        <input type="text" id="indicatorId" placeholder="e.g., PUB;a220effaf2a2472aa8f95c1c1fb1b5c1"
+                            value="PUB;a220effaf2a2472aa8f95c1c1fb1b5c1">
+                        <button id="fetchOptionsBtn" class="btn primary">Fetch Options</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Step 2: Configuration -->
+            <section class="card hidden" id="step2">
+                <h2>Configure Strategy</h2>
+
+                <!-- Symbols Section -->
+                <div class="input-group">
+                    <label>Symbols</label>
+                    <div class="symbols-container" id="symbolsContainer">
+                        <!-- Chips injected here -->
+                        <div class="add-symbol-wrapper">
+                            <input type="text" id="newSymbolInput" placeholder="Add symbol..." class="add-symbol-input">
+                            <button id="addSymbolBtn" class="btn-icon" title="Add Symbol">+</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Timeframes Section -->
+                <div class="input-group">
+                    <label>Timeframes</label>
+                    <div class="timeframe-grid">
+                        <label class="checkbox-label"><input type="checkbox" name="timeframe" value="1" checked>
+                            1m</label>
+                        <label class="checkbox-label"><input type="checkbox" name="timeframe" value="3">
+                            3m</label>
+                        <label class="checkbox-label"><input type="checkbox" name="timeframe" value="5" checked>
+                            5m</label>
+                        <label class="checkbox-label"><input type="checkbox" name="timeframe" value="15" checked>
+                            15m</label>
+                        <label class="checkbox-label"><input type="checkbox" name="timeframe" value="30">
+                            30m</label>
+                        <label class="checkbox-label"><input type="checkbox" name="timeframe" value="45">
+                            45m</label>
+                        <label class="checkbox-label"><input type="checkbox" name="timeframe" value="60">
+                            1h</label>
+                        <label class="checkbox-label"><input type="checkbox" name="timeframe" value="120">
+                            2h</label>
+                        <label class="checkbox-label"><input type="checkbox" name="timeframe" value="180">
+                            3h</label>
+                        <label class="checkbox-label"><input type="checkbox" name="timeframe" value="240" checked>
+                            4h</label>
+                        <label class="checkbox-label"><input type="checkbox" name="timeframe" value="1D" checked>
+                            1D</label>
+                        <label class="checkbox-label"><input type="checkbox" name="timeframe" value="1W" checked>
+                            1W</label>
+                        <label class="checkbox-label"><input type="checkbox" name="timeframe" value="1M">
+                            1M</label>
+                    </div>
+                </div>
+
+                <hr class="divider">
+
+                <h3>Indicator Options</h3>
+                <!-- Options List -->
+                <div id="optionsContainer" class="options-list">
+                    <!-- Dynamic options injected here -->
+                </div>
+
+                <div class="actions mt-4">
+                    <button id="runBacktestBtn" class="btn primary large">Run Backtest</button>
+                    <button id="stopBacktestBtn" class="btn secondary large hidden">Stop Backtest</button>
+                </div>
+            </section>
+
+            <!-- Step 3: Results -->
+            <section class="card hidden" id="step3">
+                <div class="header-row">
+                    <h2>Results</h2>
+                    <button id="downloadExcelBtn" class="btn secondary">Download Excel</button>
+                </div>
+
+                <div id="statusMessage" class="status-message"></div>
+                <div class="table-hint">💡 Click any row to view detailed analytics</div>
+
+                <div class="table-container">
+                    <table id="resultsTable">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>TF</th>
+                                <th>Options</th>
+                                <th>Net Profit</th>
+                                <th>Trades</th>
+                                <th>% Win</th>
+                                <th>PF</th>
+                                <th>DD</th>
+                                <th>Avg Trade</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Results will be injected here -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Analytics Detail Modal -->
+    <div id="analyticsModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Strategy Analytics</h2>
+                <button class="close-btn" id="closeModalBtn">&times;</button>
+            </div>
+
+            <div class="tabs">
+                <button class="tab-btn active" data-tab="overview">Overview</button>
+                <button class="tab-btn" data-tab="performance">Performance Summary</button>
+                <button class="tab-btn" data-tab="trades">List of Trades</button>
+            </div>
+
+            <div class="tab-content">
+                <div id="overview-tab" class="tab-pane active">
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <div class="metric-label">Net Profit</div>
+                            <div class="metric-value" id="modal-netProfit">-</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Total Trades</div>
+                            <div class="metric-value" id="modal-totalTrades">-</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">% Profitable</div>
+                            <div class="metric-value" id="modal-percentProfitable">-</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Profit Factor</div>
+                            <div class="metric-value" id="modal-profitFactor">-</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Max Drawdown</div>
+                            <div class="metric-value" id="modal-maxDrawdown">-</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Sharpe Ratio</div>
+                            <div class="metric-value" id="modal-sharpeRatio">-</div>
+                        </div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="equityChart"></canvas>
+                    </div>
+                </div>
+
+                <div id="performance-tab" class="tab-pane">
+                    <div class="performance-grid" id="performanceDetails"></div>
+                </div>
+
+                <div id="trades-tab" class="tab-pane">
+                    <div class="trades-list-container">
+                        <table class="trades-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Type</th>
+                                    <th>Entry Date/Time</th>
+                                    <th>Entry</th>
+                                    <th>Exit Date/Time</th>
+                                    <th>Exit</th>
+                                    <th>Profit</th>
+                                    <th>Profit %</th>
+                                    <th>Cumulative</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tradesTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
