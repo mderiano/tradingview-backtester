@@ -98,10 +98,7 @@
 
             <!-- Step 3: Results -->
             <section class="card hidden" id="step3">
-                <div class="header-row">
-                    <h2>Results</h2>
-                    <button id="downloadExcelBtn" class="btn secondary">Download Excel</button>
-                </div>
+                <h2>Results</h2>
 
                 <div id="statusMessage" class="status-message"></div>
                 <div class="table-hint">💡 Click any row to view detailed analytics</div>
@@ -119,6 +116,8 @@
                                 <th>PF</th>
                                 <th>DD</th>
                                 <th>Avg Trade</th>
+                                <th>Nb Days</th>
+                                <th>Profit per days</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -195,6 +194,8 @@
                                     <th>Profit</th>
                                     <th>Profit %</th>
                                     <th>Cumulative</th>
+                                    <th>DD</th>
+                                    <th>DD %</th>
                                 </tr>
                             </thead>
                             <tbody id="tradesTableBody"></tbody>

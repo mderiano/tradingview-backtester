@@ -20,14 +20,14 @@ const addSymbolBtn = document.getElementById('addSymbolBtn');
 const runBacktestBtn = document.getElementById('runBacktestBtn');
 const stopBacktestBtn = document.getElementById('stopBacktestBtn');
 const resultsTableBody = document.querySelector('#resultsTable tbody');
-const downloadExcelBtn = document.getElementById('downloadExcelBtn');
+
 const statusMessage = document.getElementById('statusMessage');
 
 // Event Listeners
 fetchOptionsBtn.addEventListener('click', fetchOptions);
 runBacktestBtn.addEventListener('click', runBacktest);
 stopBacktestBtn.addEventListener('click', stopBacktest);
-downloadExcelBtn.addEventListener('click', downloadExcel);
+
 addSymbolBtn.addEventListener('click', handleAddSymbol);
 newSymbolInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') handleAddSymbol();
@@ -507,11 +507,36 @@ function addResultRow(r) {
             <td>${r.symbol}</td>
             <td>${r.timeframe}</td>
             <td><small>${formatOptions(r.options)}</small></td>
-            <td colspan="6" class="negative">${r.error || 'Unknown error (No report data)'}</td>
+            <td colspan="8" class="negative">${r.error || 'Unknown error (No report data)'}</td>
         `;
     } else {
         const netProfit = r.report.netProfit !== 'N/A' ? r.report.netProfit : null;
         const netProfitClass = netProfit !== null && netProfit >= 0 ? 'positive' : 'negative';
+
+        // Calculate number of days and profit per day
+        let nbDays = 'N/A';
+        let profitPerDay = 'N/A';
+
+        if (r.fullReport && r.fullReport.trades && r.fullReport.trades.length > 0) {
+            const trades = r.fullReport.trades;
+            const firstTradeTime = trades[0].entry?.time;
+            const lastTradeTime = trades[trades.length - 1].exit?.time;
+
+            if (firstTradeTime && lastTradeTime) {
+                const firstDate = new Date(firstTradeTime);
+                const lastDate = new Date(lastTradeTime);
+                const diffInMs = firstDate - lastDate;
+                const diffInDays = diffInMs / (1000 * 60 * 60 * 24);
+                nbDays = diffInDays.toFixed(2);
+
+                // Calculate profit per day
+                if (netProfit !== null && diffInDays > 0) {
+                    profitPerDay = (netProfit / diffInDays).toFixed(2);
+                }
+            }
+        }
+
+        const profitPerDayClass = profitPerDay !== 'N/A' && parseFloat(profitPerDay) >= 0 ? 'positive' : 'negative';
 
         row.innerHTML = `
             <td>${r.symbol}</td>
@@ -523,6 +548,8 @@ function addResultRow(r) {
             <td>${formatNumber(r.report.profitFactor)}</td>
             <td class="negative">${formatNumber(r.report.maxDrawdown)}%</td>
             <td>${formatNumber(r.report.avgTrade)}</td>
+            <td>${nbDays}</td>
+            <td class="${profitPerDayClass}">${profitPerDay}</td>
         `;
     }
     resultsTableBody.appendChild(row);
@@ -536,39 +563,14 @@ function formatNumber(num) {
     return num;
 }
 
-async function downloadExcel() {
-    if (state.results.length === 0) return alert('No results to download');
 
-    try {
-        const response = await fetch('/api/export', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ results: state.results })
-        });
-
-        if (!response.ok) throw new Error('Export failed');
-
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'backtest_results.xlsx';
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        a.remove();
-
-    } catch (error) {
-        alert('Download failed: ' + error.message);
-    }
-}
 
 // ======= TABLE SORTING =======
 let sortState = { column: null, direction: 'asc' };
 
 function initTableSorting() {
     const headers = document.querySelectorAll('#resultsTable th');
-    const sortableColumns = [3, 4, 5, 6, 7, 8]; // Net Profit, Trades, % Win, PF, DD, Avg Trade
+    const sortableColumns = [3, 4, 5, 6, 7, 8, 9, 10]; // Net Profit, Trades, % Win, PF, DD, Avg Trade, Nb Days, Profit per days
 
     headers.forEach((header, index) => {
         if (sortableColumns.includes(index)) {
@@ -728,12 +730,34 @@ function renderEquityChart(report) {
     }
 
     const equity = report.history.equity;
-    const drawdown = report.history.drawDown || [];
+    const drawdownPercent = report.history.drawDownPercent || [];
+
+    // Create labels from trade dates if available
+    let labels = [];
+    if (report.trades && report.trades.length > 0) {
+        // Use trade exit times as labels
+        labels = report.trades.map(trade => {
+            const date = new Date(trade.exit?.time);
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+        });
+
+        // If equity array is longer than trades (includes intermediate data points), 
+        // interpolate labels or use indices for extra points
+        if (equity.length > labels.length) {
+            const extraPoints = equity.length - labels.length;
+            for (let i = 0; i < extraPoints; i++) {
+                labels.push('');
+            }
+        }
+    } else {
+        // Fallback to indices if no trade data
+        labels = equity.map((_, i) => i);
+    }
 
     currentChart = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: equity.map((_, i) => i),
+            labels: labels,
             datasets: [
                 {
                     label: 'Equity',
@@ -742,22 +766,28 @@ function renderEquityChart(report) {
                     backgroundColor: 'rgba(0, 191, 165, 0.1)',
                     fill: true,
                     tension: 0.1,
-                    borderWidth: 2
+                    borderWidth: 2,
+                    yAxisID: 'y'
                 },
                 {
-                    label: 'Drawdown',
-                    data: drawdown.map(dd => -dd),
+                    label: 'Drawdown %',
+                    data: drawdownPercent,
                     borderColor: '#f23645',
                     backgroundColor: 'rgba(242, 54, 69, 0.1)',
                     fill: true,
                     tension: 0.1,
-                    borderWidth: 1
+                    borderWidth: 1,
+                    yAxisID: 'y1'
                 }
             ]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false
+            },
             plugins: {
                 legend: {
                     labels: {
@@ -766,7 +796,24 @@ function renderEquityChart(report) {
                 },
                 tooltip: {
                     mode: 'index',
-                    intersect: false
+                    intersect: false,
+                    callbacks: {
+                        label: function (context) {
+                            let label = context.dataset.label || '';
+                            if (label) {
+                                label += ': ';
+                            }
+                            if (context.parsed.y !== null) {
+                                if (context.dataset.yAxisID === 'y1') {
+                                    // drawDownPercent is already in percentage format, no need to multiply by 100
+                                    label += context.parsed.y.toFixed(2) + '%';
+                                } else {
+                                    label += context.parsed.y.toFixed(2);
+                                }
+                            }
+                            return label;
+                        }
+                    }
                 }
             },
             scales: {
@@ -775,16 +822,48 @@ function renderEquityChart(report) {
                         color: '#2a2e39'
                     },
                     ticks: {
-                        color: '#787b86'
+                        color: '#787b86',
+                        maxRotation: 45,
+                        minRotation: 45
                     }
                 },
                 y: {
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
                     grid: {
                         color: '#2a2e39'
                     },
                     ticks: {
                         color: '#787b86'
+                    },
+                    title: {
+                        display: true,
+                        text: 'Equity',
+                        color: '#00bfa5'
                     }
+                },
+                y1: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    grid: {
+                        drawOnChartArea: false // Don't draw grid lines for this axis
+                    },
+                    ticks: {
+                        color: '#787b86',
+                        callback: function (value) {
+                            return value.toFixed(1) + '%';
+                        }
+                    },
+                    title: {
+                        display: true,
+                        text: 'Drawdown %',
+                        color: '#f23645'
+                    },
+                    // Reverse the scale so drawdown goes down from 0
+                    reverse: true,
+                    min: 0
                 }
             }
         }
@@ -830,7 +909,7 @@ function renderTradesTab(report) {
     const tbody = document.getElementById('tradesTableBody');
 
     if (!report.trades || report.trades.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9">No trades available</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11">No trades available</td></tr>';
         return;
     }
 
@@ -864,6 +943,8 @@ function renderTradesTab(report) {
                 <td class="${profitClass}">${trade.profit?.v?.toFixed(2) || 'N/A'}</td>
                 <td class="${profitClass}">${trade.profit?.p ? (trade.profit.p * 100).toFixed(2) + '%' : 'N/A'}</td>
                 <td>${trade.cumulative?.v?.toFixed(2) || 'N/A'}</td>
+                <td class="negative">${trade.drawdown?.v?.toFixed(2) || 'N/A'}</td>
+                <td class="negative">${trade.drawdown?.p ? (trade.drawdown.p * 100).toFixed(2) + '%' : 'N/A'}</td>
             </tr>
         `;
     }).join('');
