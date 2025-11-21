@@ -35,6 +35,36 @@ npm start
 
 Le serveur démarrera sur `http://localhost:3000`
 
+### 🔄 Exécution en arrière-plan avec PM2 (Production)
+
+Pour faire tourner le serveur en permanence, même après avoir fermé votre connexion SSH, utilisez PM2 :
+
+**Installation de PM2 :**
+```bash
+npm install -g pm2
+```
+
+**Démarrer le serveur avec PM2 :**
+```bash
+pm2 start server.js --name "tv-backtester"
+```
+
+**Commandes utiles PM2 :**
+```bash
+pm2 list                    # Voir les processus en cours
+pm2 logs tv-backtester      # Voir les logs en temps réel
+pm2 monit                   # Monitorer les performances
+pm2 restart tv-backtester   # Redémarrer l'application
+pm2 stop tv-backtester      # Arrêter l'application
+pm2 delete tv-backtester    # Supprimer de PM2
+```
+
+**Auto-démarrage au reboot du serveur :**
+```bash
+pm2 startup                 # Générer le script de démarrage
+pm2 save                    # Sauvegarder la liste des processus
+```
+
 ## 📊 Utilisation
 
 1. **Ouvrez votre navigateur** et accédez à `http://localhost:3000`
