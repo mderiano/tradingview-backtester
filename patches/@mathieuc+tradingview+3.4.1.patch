@@ -1,0 +1,50 @@
+diff --git a/node_modules/@mathieuc/tradingview/src/miscRequests.js b/node_modules/@mathieuc/tradingview/src/miscRequests.js
+index 1af6d0b..3f360cc 100644
+--- a/node_modules/@mathieuc/tradingview/src/miscRequests.js
++++ b/node_modules/@mathieuc/tradingview/src/miscRequests.js
+@@ -421,23 +421,23 @@ module.exports = {
+           }
+           if (rs.includes('auth_token')) {
+             cb({
+-              id: /"id":([0-9]{1,10}),/.exec(rs)[1],
+-              username: /"username":"(.*?)"/.exec(rs)[1],
+-              firstName: /"first_name":"(.*?)"/.exec(rs)[1],
+-              lastName: /"last_name":"(.*?)"/.exec(rs)[1],
+-              reputation: parseFloat(/"reputation":(.*?),/.exec(rs)[1] || 0),
+-              following: parseFloat(/,"following":([0-9]*?),/.exec(rs)[1] || 0),
+-              followers: parseFloat(/,"followers":([0-9]*?),/.exec(rs)[1] || 0),
++              id: (/\"id\":([0-9]{1,10}),/.exec(rs) || [])[1] || '0',
++              username: (/\"username\":\"(.*?)\"/.exec(rs) || [])[1] || 'unknown',
++              firstName: (/\"first_name\":\"(.*?)\"/.exec(rs) || [])[1] || '',
++              lastName: (/\"last_name\":\"(.*?)\"/.exec(rs) || [])[1] || '',
++              reputation: parseFloat(/\"reputation\":(.*?),/.exec(rs)?.[1] || '0'),
++              following: parseFloat(/,\"following\":([0-9]*?),/.exec(rs)?.[1] || '0'),
++              followers: parseFloat(/,\"followers\":([0-9]*?),/.exec(rs)?.[1] || '0'),
+               notifications: {
+-                following: parseFloat(/"notification_count":\{"following":([0-9]*),/.exec(rs)[1] || 0),
+-                user: parseFloat(/"notification_count":\{"following":[0-9]*,"user":([0-9]*)/.exec(rs)[1] || 0),
++                following: parseFloat(/\"notification_count\":\\{\"following\":([0-9]*),/.exec(rs)?.[1] || '0'),
++                user: parseFloat(/\"notification_count\":\\{\"following\":[0-9]*,\"user\":([0-9]*)/.exec(rs)?.[1] || '0'),
+               },
+               session,
+               signature,
+-              sessionHash: /"session_hash":"(.*?)"/.exec(rs)[1],
+-              privateChannel: /"private_channel":"(.*?)"/.exec(rs)[1],
+-              authToken: /"auth_token":"(.*?)"/.exec(rs)[1],
+-              joinDate: new Date(/"date_joined":"(.*?)"/.exec(rs)[1] || 0),
++              sessionHash: (/\"session_hash\":\"(.*?)\"/.exec(rs) || [])[1] || '',
++              privateChannel: (/\"private_channel\":\"(.*?)\"/.exec(rs) || [])[1] || '',
++              authToken: (/\"auth_token\":\"(.*?)\"/.exec(rs) || [])[1] || '',
++              joinDate: new Date(/\"date_joined\":\"(.*?)\"/.exec(rs)?.[1] || 0),
+             });
+           } else err(new Error('Wrong or expired sessionid/signature'));
+         });
+@@ -566,7 +566,7 @@ module.exports = {
+     const { data } = await request({
+       host: 'charts-storage.tradingview.com',
+       path: `/charts-storage/layout/${layout}/sources?chart_id=${chartID
+-      }&jwt=${chartToken}${symbol ? `&symbol=${symbol}` : ''}`,
++        }&jwt=${chartToken}${symbol ? `&symbol=${symbol}` : ''}`,
+       headers: { cookie: session ? `sessionid=${session}${signature ? `;sessionid_sign=${signature};` : ''}` : '' },
+     });
+ 

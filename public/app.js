@@ -19,6 +19,8 @@ const newSymbolInput = document.getElementById('newSymbolInput');
 const addSymbolBtn = document.getElementById('addSymbolBtn');
 const runBacktestBtn = document.getElementById('runBacktestBtn');
 const stopBacktestBtn = document.getElementById('stopBacktestBtn');
+const dateFromInput = document.getElementById('dateFrom');
+const dateToInput = document.getElementById('dateTo');
 const resultsTableBody = document.querySelector('#resultsTable tbody');
 
 const statusMessage = document.getElementById('statusMessage');
@@ -35,7 +37,26 @@ newSymbolInput.addEventListener('keypress', (e) => {
 
 
 // Load config and settings on page load
+// Initialize date inputs with default 1-year range
+function initializeDateInputs() {
+    const today = new Date();
+    const oneYearAgo = new Date();
+    oneYearAgo.setFullYear(today.getFullYear() - 1);
+
+    // Format as YYYY-MM-DD
+    const formatDate = (date) => date.toISOString().split('T')[0];
+
+    // Only set defaults if not already set (from localStorage)
+    if (!dateFromInput.value) {
+        dateFromInput.value = formatDate(oneYearAgo);
+    }
+    if (!dateToInput.value) {
+        dateToInput.value = formatDate(today);
+    }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+    initializeDateInputs();
     loadSettings();
     await fetchConfig();
 });
@@ -72,7 +93,9 @@ function saveSettings() {
         symbols: state.symbols,
         timeframes: Array.from(document.querySelectorAll('input[name="timeframe"]:checked')).map(cb => cb.value),
         options: state.options,
-        ranges: state.ranges
+        ranges: state.ranges,
+        dateFrom: dateFromInput.value,
+        dateTo: dateToInput.value
     };
     localStorage.setItem('backtestSettings', JSON.stringify(settings));
 }
@@ -111,6 +134,14 @@ function loadSettings() {
                     cb.checked = settings.timeframes.includes(cb.value);
                 });
             }, 100);
+        }
+
+        // Restore date range
+        if (settings.dateFrom) {
+            dateFromInput.value = settings.dateFrom;
+        }
+        if (settings.dateTo) {
+            dateToInput.value = settings.dateTo;
         }
 
         // Note: Options and ranges will be restored after fetching indicator
@@ -384,7 +415,9 @@ async function runBacktest() {
             ranges: state.ranges,
             symbols: state.symbols,
             timeframes,
-            inputMetadata: state.inputMetadata // Send readable names to backend
+            inputMetadata: state.inputMetadata, // Send readable names to backend
+            dateFrom: dateFromInput.value,
+            dateTo: dateToInput.value
         };
 
         // Start job via HTTP

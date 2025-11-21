@@ -200,7 +200,7 @@ function cleanErrorMessage(err) {
 }
 
 // Async Backtest Runner
-async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, timeframes }) {
+async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo }) {
     const job = jobs.get(jobId);
     job.status = 'running';
     broadcast(jobId, { type: 'status', status: 'running' });
@@ -214,23 +214,17 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
 
         let completedTests = 0;
 
-        // Create a shared client for this batch
+        // Create a shared client for this batch using Deep Backtesting (Premium only)
+        // This uses TradingView's history-data server for deep historical data
         const client = new TradingView.Client({
             token: process.env.SESSION,
             signature: process.env.SIGNATURE,
+            server: 'history-data', // Premium feature - deep backtesting
         });
 
         // Process sequentially
         for (const symbol of symbols) {
             for (const timeframe of timeframes) {
-
-                // Create chart for this symbol/timeframe
-                const chart = new client.Session.Chart();
-                chart.setMarket(symbol, { timeframe });
-
-                // Wait a bit for chart to init
-                await new Promise(r => setTimeout(r, 500));
-
                 for (const combo of optionCombinations) {
                     // Check if job was cancelled
                     if (job.cancelled) {
@@ -240,7 +234,7 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
                     }
 
                     try {
-                        // console.log(`Testing: ${symbol} ${timeframe} options=${JSON.stringify(combo)}`);
+                        console.log(`Testing: ${symbol} ${timeframe} options=${JSON.stringify(combo)}`);
 
                         const strategy = await TradingView.getIndicator(
                             indicatorId,
@@ -254,27 +248,54 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
                             strategy.setOption(key, combo[key]);
                         });
 
-                        const indicator = new chart.Study(strategy);
+                        // Create history session for deep backtesting
+                        const history = new client.Session.History();
 
+                        // Set up error handling
+                        history.onError((...error) => {
+                            console.error('History error:', error);
+                            history.delete();
+                            throw new Error(error.join(' '));
+                        });
+
+                        // Calculate timestamps from date inputs or default to 1 year
+                        let from, to;
+
+                        if (dateFrom && dateTo) {
+                            // Convert date strings (YYYY-MM-DD) to Unix timestamps
+                            from = Math.floor(new Date(dateFrom).getTime() / 1000);
+                            to = Math.floor(new Date(dateTo).getTime() / 1000);
+                        } else {
+                            // Default: from 1 year ago to now
+                            from = Math.floor(Date.now() / 1000) - (1 * 365 * 24 * 60 * 60);
+                            to = Math.floor(Date.now() / 1000);
+                        }
+
+                        // Request deep backtest
+                        history.requestHistoryData(symbol, from, to, strategy, { timeframe });
+
+                        // Wait for history to load
                         const report = await new Promise((resolve, reject) => {
                             let timeout = setTimeout(() => {
-                                reject(new Error('Timeout waiting for report'));
-                            }, 20000); // 20s timeout
+                                history.delete();
+                                reject(new Error('Timeout waiting for deep backtest report'));
+                            }, 30000); // 30s timeout for deep backtests
 
-                            indicator.onUpdate(() => {
-                                if (indicator.strategyReport) {
-                                    clearTimeout(timeout);
-                                    resolve(indicator.strategyReport);
-                                }
-                            });
-
-                            indicator.onError((err) => {
+                            history.onHistoryLoaded(() => {
                                 clearTimeout(timeout);
-                                reject(err);
+                                resolve(history.strategyReport);
                             });
                         });
 
-                        console.log(`✓ Report received for ${symbol} ${timeframe}`);
+                        console.log(`✓ Deep backtest report received for ${symbol} ${timeframe}`);
+
+                        // DEBUG: Log data availability and strategy settings
+                        if (report && report.settings && report.settings.dateRange) {
+                            const fromDate = new Date(report.settings.dateRange.backtest.from).toISOString().split('T')[0];
+                            const toDate = new Date(report.settings.dateRange.backtest.to).toISOString().split('T')[0];
+                            console.log(`  Backtest date range: ${fromDate} to ${toDate}`);
+                        }
+                        console.log(`  Total trades: ${report?.performance?.all?.totalTrades || 0}`);
 
                         const result = {
                             symbol,
@@ -297,8 +318,8 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
                         job.results.push(result);
                         broadcast(jobId, { type: 'result', data: result });
 
-                        // Cleanup indicator
-                        indicator.remove();
+                        // Cleanup history session
+                        history.delete();
 
                     } catch (err) {
                         console.error(`Failed test for ${symbol} ${timeframe}:`, err);
@@ -310,7 +331,7 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
                         job.status = 'failed';
                         job.error = errorMessage;
 
-                        // Send the error result so it shows in the table (optional, but good for context)
+                        // Send the error result so it shows in the table
                         const errorResult = {
                             symbol,
                             timeframe,
@@ -323,8 +344,7 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
                         // Broadcast fatal error to stop frontend
                         broadcast(jobId, { type: 'error', message: errorMessage });
 
-                        // Cleanup chart and client
-                        chart.delete();
+                        // Cleanup client
                         client.end();
                         return; // Stop the job
                     }
@@ -337,9 +357,6 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
                         percent: Math.round((completedTests / totalTests) * 100)
                     });
                 }
-
-                // Cleanup chart
-                chart.delete();
             }
         }
 
@@ -359,7 +376,7 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
 // API: Start Backtest (Async)
 app.post('/api/backtest', (req, res) => {
     try {
-        const { indicatorId, options, ranges, symbols, timeframes } = req.body;
+        const { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo } = req.body;
 
         const jobId = crypto.randomUUID();
         jobs.set(jobId, {
@@ -370,7 +387,7 @@ app.post('/api/backtest', (req, res) => {
         });
 
         // Start job in background
-        runBacktestJob(jobId, { indicatorId, options, ranges, symbols, timeframes });
+        runBacktestJob(jobId, { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo });
 
         res.json({ jobId, message: 'Backtest started' });
 
