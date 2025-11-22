@@ -285,10 +285,14 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
 
                         // Wait for history to load
                         const report = await new Promise((resolve, reject) => {
+                            // Use configurable timeout (default 120s for production environments)
+                            // Production servers may have slower network connections to TradingView
+                            const timeoutMs = parseInt(process.env.BACKTEST_TIMEOUT_MS || '120000');
+
                             let timeout = setTimeout(() => {
                                 history.delete();
-                                reject(new Error('Timeout waiting for deep backtest report'));
-                            }, 30000); // 30s timeout for deep backtests
+                                reject(new Error(`Timeout waiting for deep backtest report after ${timeoutMs}ms`));
+                            }, timeoutMs);
 
                             history.onHistoryLoaded(() => {
                                 clearTimeout(timeout);
