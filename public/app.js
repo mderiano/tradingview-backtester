@@ -24,11 +24,13 @@ const dateToInput = document.getElementById('dateTo');
 const resultsTableBody = document.querySelector('#resultsTable tbody');
 
 const statusMessage = document.getElementById('statusMessage');
+const clearSettingsBtn = document.getElementById('clearSettingsBtn');
 
 // Event Listeners
 fetchOptionsBtn.addEventListener('click', fetchOptions);
 runBacktestBtn.addEventListener('click', runBacktest);
 stopBacktestBtn.addEventListener('click', stopBacktest);
+clearSettingsBtn.addEventListener('click', clearSettings);
 
 addSymbolBtn.addEventListener('click', handleAddSymbol);
 newSymbolInput.addEventListener('keypress', (e) => {
@@ -133,6 +135,13 @@ function loadSettings() {
                 document.querySelectorAll('input[name="timeframe"]').forEach(cb => {
                     cb.checked = settings.timeframes.includes(cb.value);
                 });
+                attachTimeframeListeners();
+                updateBacktestSummary();
+            }, 100);
+        } else {
+            setTimeout(() => {
+                attachTimeframeListeners();
+                updateBacktestSummary();
             }, 100);
         }
 
@@ -157,6 +166,24 @@ function loadSettings() {
     }
 }
 
+function clearSettings() {
+    if (!confirm('Clear all saved settings? This will reset symbols, timeframes, options, and ranges.')) {
+        return;
+    }
+
+    localStorage.removeItem('backtestSettings');
+    alert('Settings cleared! Reloading page...');
+    location.reload();
+}
+
+function attachTimeframeListeners() {
+    document.querySelectorAll('input[name="timeframe"]').forEach(checkbox => {
+        checkbox.addEventListener('change', () => {
+            updateBacktestSummary();
+        });
+    });
+}
+
 // --- SYMBOL MANAGEMENT ---
 function renderSymbols() {
     // Clear existing chips (except the input wrapper)
@@ -175,6 +202,9 @@ function renderSymbols() {
         `;
         symbolsContainer.insertBefore(chip, wrapper);
     });
+
+    // Update backtest summary when symbols change
+    updateBacktestSummary();
 }
 
 function handleAddSymbol() {
@@ -344,6 +374,9 @@ function renderOptions(inputs) {
 
         optionsContainer.appendChild(row);
     });
+
+    // Update backtest summary after rendering options
+    setTimeout(() => updateBacktestSummary(), 100);
 }
 
 window.updateOption = (key, value, type) => {
@@ -376,18 +409,121 @@ window.toggleRange = (key, checked) => {
         } else {
             state.ranges[key].active = true;
         }
+
+        // Show value count
+        updateRangeValueCount(key);
     } else {
         settingsDiv.classList.add('hidden');
         if (state.ranges[key]) {
             state.ranges[key].active = false;
         }
+        // Update summary when optimization is disabled
+        updateBacktestSummary();
     }
 };
 
 window.updateRange = (key, field, value) => {
     if (!state.ranges[key]) state.ranges[key] = { active: true };
     state.ranges[key][field] = parseFloat(value);
+
+    // Update the value count display
+    updateRangeValueCount(key);
+    updateBacktestSummary(); // Update summary when range values change
 };
+
+function updateRangeValueCount(key) {
+    const range = state.ranges[key];
+    if (!range || !range.active) return;
+
+    const { min, max, step } = range;
+    if (isNaN(min) || isNaN(max) || isNaN(step) || step <= 0) return;
+
+    const steps = Math.round((max - min) / step);
+    const count = steps + 1;
+
+    // Find or create the count display element
+    const settingsDiv = document.getElementById(`opt_settings_${key}`);
+    if (!settingsDiv) return;
+
+    let countDisplay = settingsDiv.querySelector('.range-count');
+    if (!countDisplay) {
+        countDisplay = document.createElement('div');
+        countDisplay.className = 'range-count';
+        settingsDiv.appendChild(countDisplay);
+    }
+
+    // Update the display with appropriate styling
+    const isLarge = count > 50;
+    const isVeryLarge = count > 100;
+
+    countDisplay.textContent = `${count} value${count !== 1 ? 's' : ''} will be tested for this parameter`;
+    countDisplay.style.color = isVeryLarge ? '#ff9800' : isLarge ? '#ffc107' : '#4CAF50';
+    countDisplay.style.fontWeight = isVeryLarge ? '600' : '400';
+
+    // Update the overall backtest summary
+    updateBacktestSummary();
+}
+
+function updateBacktestSummary() {
+    // Calculate total backtests
+    const symbolCount = state.symbols.length;
+    const timeframeCount = Array.from(document.querySelectorAll('input[name="timeframe"]:checked')).length;
+
+    // Calculate total option combinations
+    let totalCombinations = 1;
+    const rangeInfo = [];
+
+    Object.keys(state.ranges).forEach(key => {
+        if (state.ranges[key].active) {
+            const r = state.ranges[key];
+            if (typeof state.options[key] === 'boolean') {
+                totalCombinations *= 2;
+                rangeInfo.push({ name: state.inputMetadata[key] || key, count: 2 });
+            } else {
+                const steps = Math.round((r.max - r.min) / r.step);
+                const count = steps + 1;
+                totalCombinations *= count;
+                rangeInfo.push({ name: state.inputMetadata[key] || key, count: count });
+            }
+        }
+    });
+
+    const totalBacktests = symbolCount * timeframeCount * totalCombinations;
+
+    // Update the UI
+    const totalElement = document.getElementById('totalBacktests');
+    const detailsElement = document.getElementById('breakdownDetails');
+
+    if (totalElement && detailsElement) {
+        totalElement.textContent = totalBacktests.toLocaleString();
+
+        // Build breakdown string
+        let breakdown = `${symbolCount} symbol${symbolCount !== 1 ? 's' : ''} × ${timeframeCount} timeframe${timeframeCount !== 1 ? 's' : ''}`;
+
+        if (rangeInfo.length > 0) {
+            breakdown += ` × ${totalCombinations.toLocaleString()} combinations`;
+            const rangeDesc = rangeInfo.map(r => `${r.name}: ${r.count}`).join(', ');
+            breakdown += ` (${rangeDesc})`;
+        }
+
+        detailsElement.textContent = breakdown;
+
+        // Color-code the total based on size
+        if (totalBacktests > 500) {
+            totalElement.style.background = 'linear-gradient(45deg, #ff9800, #f44336)';
+            totalElement.style.webkitBackgroundClip = 'text';
+            totalElement.style.backgroundClip = 'text';
+        } else if (totalBacktests > 100) {
+            totalElement.style.background = 'linear-gradient(45deg, #ffc107, #ff9800)';
+            totalElement.style.webkitBackgroundClip = 'text';
+            totalElement.style.backgroundClip = 'text';
+        } else {
+            totalElement.style.background = 'linear-gradient(45deg, #2962ff, #00bfa5)';
+            totalElement.style.webkitBackgroundClip = 'text';
+            totalElement.style.backgroundClip = 'text';
+        }
+    }
+}
 
 async function runBacktest() {
     const timeframes = Array.from(document.querySelectorAll('input[name="timeframe"]:checked'))
@@ -396,6 +532,38 @@ async function runBacktest() {
     if (state.symbols.length === 0 || timeframes.length === 0) {
         return alert('Please enter at least one symbol and select at least one timeframe');
     }
+
+    // Calculate total number of option combinations
+    let totalCombinations = 1;
+    const rangeDetails = [];
+
+    Object.keys(state.ranges).forEach(key => {
+        if (state.ranges[key].active) {
+            const r = state.ranges[key];
+            if (typeof state.options[key] === 'boolean') {
+                totalCombinations *= 2;
+                rangeDetails.push(`${state.inputMetadata[key] || key}: 2 values (true/false)`);
+            } else {
+                const steps = Math.round((r.max - r.min) / r.step);
+                const count = steps + 1;
+                totalCombinations *= count;
+                rangeDetails.push(`${state.inputMetadata[key] || key}: ${count} values (${r.min} to ${r.max} by ${r.step})`);
+            }
+        }
+    });
+
+    const totalBacktests = state.symbols.length * timeframes.length * totalCombinations;
+
+    // Show confirmation if running many backtests
+    if (totalBacktests > 50) {
+        const details = rangeDetails.length > 0 ? '\n\nRange details:\n' + rangeDetails.join('\n') : '';
+        const message = `You are about to run ${totalBacktests} backtests:\n• ${state.symbols.length} symbols\n• ${timeframes.length} timeframes\n• ${totalCombinations} option combinations${details}\n\nThis may take several minutes. Continue?`;
+
+        if (!confirm(message)) {
+            return;
+        }
+    }
+
 
     runBacktestBtn.disabled = true;
     runBacktestBtn.textContent = 'Running Backtest...';
@@ -419,6 +587,16 @@ async function runBacktest() {
             dateFrom: dateFromInput.value,
             dateTo: dateToInput.value
         };
+
+        // Debug: Log the ranges being sent
+        console.log('📤 Sending ranges to backend:');
+        Object.keys(state.ranges).forEach(key => {
+            if (state.ranges[key].active) {
+                const r = state.ranges[key];
+                console.log(`  ${key}: min=${r.min}, max=${r.max}, step=${r.step}`);
+            }
+        });
+
 
         // Start job via HTTP
         const response = await fetch('/api/backtest', {
@@ -581,8 +759,6 @@ function addResultRow(r) {
             <td>${formatNumber(r.report.profitFactor)}</td>
             <td class="negative">${formatNumber(r.report.maxDrawdown)}%</td>
             <td>${formatNumber(r.report.avgTrade)}</td>
-            <td>${nbDays}</td>
-            <td class="${profitPerDayClass}">${profitPerDay}</td>
         `;
     }
     resultsTableBody.appendChild(row);

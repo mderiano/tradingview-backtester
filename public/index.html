@@ -107,9 +107,23 @@
                     <!-- Dynamic options injected here -->
                 </div>
 
+                <!-- Backtest Summary -->
+                <div id="backtestSummary" class="backtest-summary">
+                    <div class="summary-icon">📊</div>
+                    <div class="summary-content">
+                        <div class="summary-label">Total Backtests to Run:</div>
+                        <div class="summary-breakdown" id="backtestBreakdown">
+                            <span id="totalBacktests" class="total-count">0</span>
+                            <span class="breakdown-details" id="breakdownDetails"></span>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="actions mt-4">
                     <button id="runBacktestBtn" class="btn primary large">Run Backtest</button>
                     <button id="stopBacktestBtn" class="btn secondary large hidden">Stop Backtest</button>
+                    <button id="clearSettingsBtn" class="btn secondary" style="margin-left: auto;"
+                        title="Clear all saved settings from localStorage">Clear Settings</button>
                 </div>
             </section>
 
@@ -133,8 +147,6 @@
                                 <th>PF</th>
                                 <th>DD</th>
                                 <th>Avg Trade</th>
-                                <th>Nb Days</th>
-                                <th>Profit per days</th>
                             </tr>
                         </thead>
                         <tbody>

@@ -153,9 +153,12 @@ function generateOptionCombinations(baseOptions, ranges) {
         if (ranges && ranges[key] && ranges[key].active) {
             if (typeof baseOptions[key] === 'boolean') {
                 values = [true, false];
+                console.log(`🔧 Range for ${key}: boolean (testing true/false)`);
             } else {
                 const { min, max, step } = ranges[key];
+                console.log(`🔧 Range for ${key}: min=${min}, max=${max}, step=${step}`);
                 values = getRangeValues(min, max, step);
+                console.log(`  → Generated ${values.length} values: [${values.join(', ')}]`);
             }
         }
 
