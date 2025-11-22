@@ -61,6 +61,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     initializeDateInputs();
     loadSettings();
     await fetchConfig();
+
+    // Attach timeframe listeners after DOM is ready
+    attachTimeframeListeners();
 });
 
 async function fetchConfig() {
@@ -135,12 +138,10 @@ function loadSettings() {
                 document.querySelectorAll('input[name="timeframe"]').forEach(cb => {
                     cb.checked = settings.timeframes.includes(cb.value);
                 });
-                attachTimeframeListeners();
                 updateBacktestSummary();
             }, 100);
         } else {
             setTimeout(() => {
-                attachTimeframeListeners();
                 updateBacktestSummary();
             }, 100);
         }
@@ -177,11 +178,19 @@ function clearSettings() {
 }
 
 function attachTimeframeListeners() {
-    document.querySelectorAll('input[name="timeframe"]').forEach(checkbox => {
-        checkbox.addEventListener('change', () => {
-            updateBacktestSummary();
-        });
+    const checkboxes = document.querySelectorAll('input[name="timeframe"]');
+    console.log(`🔌 Attaching timeframe listeners to ${checkboxes.length} checkboxes`);
+    checkboxes.forEach(checkbox => {
+        // Remove existing listener if any (to prevent duplicates)
+        checkbox.removeEventListener('change', handleTimeframeChange);
+        // Add new listener
+        checkbox.addEventListener('change', handleTimeframeChange);
     });
+}
+
+function handleTimeframeChange() {
+    console.log('⏱️ Timeframe changed, updating summary...');
+    updateBacktestSummary();
 }
 
 // --- SYMBOL MANAGEMENT ---
