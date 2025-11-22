@@ -274,6 +274,12 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
                             to = Math.floor(Date.now() / 1000);
                         }
 
+                        // Add 1-day buffer before start date to avoid missing trades at boundary
+                        // TradingView API has a boundary condition where trades very close to
+                        // the exact start timestamp may be excluded. Subtracting 1 day ensures
+                        // we capture all trades in the requested range.
+                        from = from - (24 * 60 * 60); // Subtract 1 day in seconds
+
                         // Request deep backtest
                         history.requestHistoryData(symbol, from, to, strategy, { timeframe });
 
