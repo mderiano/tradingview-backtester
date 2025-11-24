@@ -5,6 +5,9 @@ const ExcelJS = require('exceljs');
 const WebSocket = require('ws');
 const http = require('http');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const zlib = require('zlib');
 require('dotenv').config();
 
 const app = express();
@@ -18,6 +21,70 @@ const wss = new WebSocket.Server({ server });
 
 // Job Store: { jobId: { status, progress, results, error, cancelled } }
 const jobs = new Map();
+
+// Ensure results directory exists
+const RESULTS_DIR = path.join(__dirname, 'results');
+if (!fs.existsSync(RESULTS_DIR)) {
+    fs.mkdirSync(RESULTS_DIR);
+}
+
+// Helper: Save job to disk
+function saveJob(jobId) {
+    const job = jobs.get(jobId);
+    if (!job) return;
+
+    const filePath = path.join(RESULTS_DIR, `${jobId}.json`);
+    // Save a copy of the job object
+    const jobData = JSON.stringify(job, null, 2);
+
+    fs.writeFile(filePath, jobData, (err) => {
+        if (err) console.error(`Failed to save job ${jobId}:`, err);
+    });
+}
+
+// Helper: Compress old results
+function compressOldResults() {
+    const retentionDays = parseInt(process.env.RETENTION_DAYS || '15');
+    const now = Date.now();
+    const msPerDay = 24 * 60 * 60 * 1000;
+
+    fs.readdir(RESULTS_DIR, (err, files) => {
+        if (err) return console.error('Error reading results dir for cleanup:', err);
+
+        files.forEach(file => {
+            if (!file.endsWith('.json')) return; // Only compress .json files
+
+            const filePath = path.join(RESULTS_DIR, file);
+            fs.stat(filePath, (err, stats) => {
+                if (err) return;
+
+                const ageDays = (now - stats.mtimeMs) / msPerDay;
+                if (ageDays > retentionDays) {
+                    console.log(`Compressing old result: ${file} (${ageDays.toFixed(1)} days old)`);
+
+                    const gzip = zlib.createGzip();
+                    const source = fs.createReadStream(filePath);
+                    const destination = fs.createWriteStream(`${filePath}.gz`);
+
+                    source.pipe(gzip).pipe(destination).on('finish', () => {
+                        // Delete original file after successful compression
+                        fs.unlink(filePath, (err) => {
+                            if (err) console.error(`Error deleting ${file} after compression:`, err);
+                            else console.log(`Compressed and deleted ${file}`);
+                        });
+                    }).on('error', (err) => {
+                        console.error(`Error compressing ${file}:`, err);
+                    });
+                }
+            });
+        });
+    });
+}
+
+// Run compression check on startup
+compressOldResults();
+// Run compression check every 24 hours
+setInterval(compressOldResults, 24 * 60 * 60 * 1000);
 
 // WebSocket connection handler
 wss.on('connection', (ws) => {
@@ -206,6 +273,7 @@ function cleanErrorMessage(err) {
 async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo }) {
     const job = jobs.get(jobId);
     job.status = 'running';
+    saveJob(jobId); // Save initial state
     broadcast(jobId, { type: 'status', status: 'running' });
 
     try {
@@ -329,6 +397,11 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
                         };
 
                         job.results.push(result);
+                        saveJob(jobId); // Save progress (optional, maybe too frequent? Let's save on batch or completion to avoid IO spam)
+                        // Actually, for long running jobs, saving periodically is good. Let's save every 10 results or so?
+                        // For now, let's just save on completion to avoid performance hit, or maybe every 5 minutes.
+                        // Let's stick to saving on completion/error for now, and maybe update status.
+
                         broadcast(jobId, { type: 'result', data: result });
 
                         // Cleanup history session
@@ -343,6 +416,7 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
                         console.log(`Job ${jobId} stopping due to error: ${errorMessage}`);
                         job.status = 'failed';
                         job.error = errorMessage;
+                        saveJob(jobId); // Save error state
 
                         // Send the error result so it shows in the table
                         const errorResult = {
@@ -375,6 +449,7 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
 
         client.end();
         job.status = 'completed';
+        saveJob(jobId); // Save final state
         broadcast(jobId, { type: 'complete', results: job.results });
         console.log(`Job ${jobId}: Completed`);
 
@@ -382,6 +457,7 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
         console.error(`Job ${jobId} failed:`, error);
         job.status = 'failed';
         job.error = error.message;
+        saveJob(jobId); // Save failure state
         broadcast(jobId, { type: 'error', message: error.message });
     }
 }
@@ -395,11 +471,13 @@ app.post('/api/backtest', (req, res) => {
         jobs.set(jobId, {
             id: jobId,
             status: 'pending',
+            config: { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo },
             results: [],
             startTime: Date.now()
         });
 
         // Start job in background
+        saveJob(jobId); // Save pending state
         runBacktestJob(jobId, { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo });
 
         res.json({ jobId, message: 'Backtest started' });
@@ -422,6 +500,7 @@ app.post('/api/backtest/:jobId/cancel', (req, res) => {
     // Set cancelled flag
     job.cancelled = true;
     job.status = 'cancelled';
+    saveJob(jobId); // Save cancelled state
 
     // Broadcast cancellation
     broadcast(jobId, {
@@ -430,6 +509,98 @@ app.post('/api/backtest/:jobId/cancel', (req, res) => {
     });
 
     res.json({ success: true, message: 'Job cancelled' });
+});
+
+// API: List Jobs
+app.get('/api/jobs', (req, res) => {
+    try {
+        const files = fs.readdirSync(RESULTS_DIR);
+        const jobSummaries = files
+            .filter(f => f.endsWith('.json') || f.endsWith('.json.gz'))
+            .map(f => {
+                try {
+                    const filePath = path.join(RESULTS_DIR, f);
+                    const stats = fs.statSync(filePath);
+
+                    // If it's a gz file, we can't easily read the content without unzipping, 
+                    // so we might just return basic info or try to read a bit.
+                    // For now, let's assume we only list .json files for detailed info, 
+                    // or we just list them as "Archived".
+
+                    if (f.endsWith('.json.gz')) {
+                        return {
+                            id: f.replace('.json.gz', ''),
+                            date: stats.mtime,
+                            status: 'archived',
+                            symbolCount: '?',
+                            isArchived: true
+                        };
+                    }
+
+                    const content = fs.readFileSync(filePath, 'utf8');
+                    const job = JSON.parse(content);
+                    return {
+                        id: job.id,
+                        date: new Date(job.startTime),
+                        status: job.status,
+                        symbolCount: job.results ? job.results.length : 0,
+                        isArchived: false
+                    };
+                } catch (e) {
+                    console.error(`Error reading job file ${f}:`, e);
+                    return null;
+                }
+            })
+            .filter(j => j !== null)
+            .sort((a, b) => b.date - a.date); // Newest first
+
+        res.json(jobSummaries);
+    } catch (error) {
+        console.error('Error listing jobs:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// API: Get Job Details
+app.get('/api/jobs/:id', (req, res) => {
+    const { id } = req.params;
+
+    // Check memory first
+    if (jobs.has(id)) {
+        return res.json(jobs.get(id));
+    }
+
+    // Check disk
+    const jsonPath = path.join(RESULTS_DIR, `${id}.json`);
+    const gzPath = path.join(RESULTS_DIR, `${id}.json.gz`);
+
+    if (fs.existsSync(jsonPath)) {
+        try {
+            const content = fs.readFileSync(jsonPath, 'utf8');
+            const job = JSON.parse(content);
+            // Cache in memory? Maybe not, to avoid memory leaks.
+            res.json(job);
+        } catch (e) {
+            res.status(500).json({ error: 'Failed to read job file' });
+        }
+    } else if (fs.existsSync(gzPath)) {
+        try {
+            const gzContent = fs.readFileSync(gzPath);
+            zlib.gunzip(gzContent, (err, buffer) => {
+                if (err) return res.status(500).json({ error: 'Failed to decompress job file' });
+                try {
+                    const job = JSON.parse(buffer.toString());
+                    res.json(job);
+                } catch (e) {
+                    res.status(500).json({ error: 'Failed to parse decompressed job file' });
+                }
+            });
+        } catch (e) {
+            res.status(500).json({ error: 'Failed to read compressed job file' });
+        }
+    } else {
+        res.status(404).json({ error: 'Job not found' });
+    }
 });
 
 // API: Export to Excel

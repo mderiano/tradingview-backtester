@@ -26,7 +26,15 @@ const resultsTableBody = document.querySelector('#resultsTable tbody');
 const statusMessage = document.getElementById('statusMessage');
 const clearSettingsBtn = document.getElementById('clearSettingsBtn');
 
+// History Elements
+const historyBtn = document.getElementById('historyBtn');
+const historyModal = document.getElementById('historyModal');
+const closeHistoryBtn = document.getElementById('closeHistoryBtn');
+const historyTableBody = document.getElementById('historyTableBody');
+
 // Event Listeners
+historyBtn.addEventListener('click', openHistoryModal);
+closeHistoryBtn.addEventListener('click', () => historyModal.classList.add('hidden'));
 fetchOptionsBtn.addEventListener('click', fetchOptions);
 runBacktestBtn.addEventListener('click', runBacktest);
 stopBacktestBtn.addEventListener('click', stopBacktest);
@@ -64,7 +72,250 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Attach timeframe listeners after DOM is ready
     attachTimeframeListeners();
+
+    // Check for active job to restore
+    checkActiveJob();
 });
+
+async function checkActiveJob() {
+    const savedJobId = localStorage.getItem('currentJobId');
+    if (!savedJobId) return;
+
+    try {
+        console.log('Checking for active job:', savedJobId);
+        const res = await fetch(`/api/jobs/${savedJobId}`);
+        if (!res.ok) {
+            if (res.status === 404) localStorage.removeItem('currentJobId');
+            return;
+        }
+
+        const job = await res.json();
+
+        // If job is running, reconnect
+        if (job.status === 'running' || job.status === 'pending') {
+            console.log('Restoring running job...');
+            restoreJob(job);
+        } else if (job.status === 'completed') {
+            // Optional: Auto-load completed job if it's very recent?
+            // For now, let's just let the user load it from history if they want,
+            // or maybe show a notification.
+            // Actually, let's load it if it's the first load to be helpful.
+            console.log('Restoring completed job...');
+            restoreJob(job);
+        }
+    } catch (e) {
+        console.error('Error checking active job:', e);
+    }
+}
+
+async function openHistoryModal() {
+    historyModal.classList.remove('hidden');
+    await fetchHistory();
+}
+
+async function fetchHistory() {
+    historyTableBody.innerHTML = '<tr><td colspan="5">Loading...</td></tr>';
+    try {
+        const res = await fetch('/api/jobs');
+        const jobs = await res.json();
+        renderHistory(jobs);
+    } catch (e) {
+        historyTableBody.innerHTML = `<tr><td colspan="5" class="negative">Error: ${e.message}</td></tr>`;
+    }
+}
+
+function renderHistory(jobs) {
+    historyTableBody.innerHTML = '';
+    if (jobs.length === 0) {
+        historyTableBody.innerHTML = '<tr><td colspan="5">No history found</td></tr>';
+        return;
+    }
+
+    jobs.forEach(job => {
+        const row = document.createElement('tr');
+        const date = new Date(job.date).toLocaleString();
+        const statusClass = `status-${job.status}`;
+
+        row.innerHTML = `
+            <td>${date}</td>
+            <td><span class="status-badge ${statusClass}">${job.status}</span></td>
+            <td>${job.symbolCount || '?'} symbols</td>
+            <td>${job.isArchived ? 'Archived' : 'Available'}</td>
+            <td>
+                <button class="btn small primary" onclick="loadJob('${job.id}')">Load</button>
+            </td>
+        `;
+        historyTableBody.appendChild(row);
+    });
+}
+
+window.loadJob = async (jobId) => {
+    try {
+        historyModal.classList.add('hidden');
+        statusMessage.textContent = 'Loading job...';
+
+        const res = await fetch(`/api/jobs/${jobId}`);
+        if (!res.ok) throw new Error('Failed to load job');
+
+        const job = await res.json();
+        restoreJob(job);
+
+    } catch (e) {
+        alert('Error loading job: ' + e.message);
+    }
+};
+
+function restoreJob(job) {
+    // Restore state
+    state.currentJobId = job.id;
+    state.results = job.results || [];
+
+    // Restore config if available
+    if (job.config) {
+        const cfg = job.config;
+
+        // Restore Indicator ID
+        if (cfg.indicatorId) {
+            state.indicatorId = cfg.indicatorId;
+            indicatorIdInput.value = cfg.indicatorId;
+            // Hide step 1 if we have an ID
+            document.getElementById('step1').classList.add('hidden');
+            step2.classList.remove('hidden');
+        }
+
+        // Restore Symbols
+        if (cfg.symbols && Array.isArray(cfg.symbols)) {
+            state.symbols = cfg.symbols;
+            renderSymbols();
+        }
+
+        // Restore Timeframes
+        if (cfg.timeframes) {
+            document.querySelectorAll('input[name="timeframe"]').forEach(cb => {
+                cb.checked = cfg.timeframes.includes(cb.value);
+            });
+        }
+
+        // Restore Dates
+        if (cfg.dateFrom) dateFromInput.value = cfg.dateFrom;
+        if (cfg.dateTo) dateToInput.value = cfg.dateTo;
+
+        // Restore Options & Ranges
+        // We need to fetch options first to render the UI, then apply values
+        if (cfg.indicatorId) {
+            // We can't await here easily without making restoreJob async, 
+            // but fetchOptions is async.
+            // Let's try to fetch options and then apply values.
+            fetch(`/api/indicator?id=${encodeURIComponent(cfg.indicatorId)}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.inputs) {
+                        // Render options with default values
+                        // But we want to override with saved values
+
+                        // Temporarily set savedOptionsAndRanges so renderOptions uses them
+                        window.savedOptionsAndRanges = {
+                            indicatorId: cfg.indicatorId,
+                            options: cfg.options,
+                            ranges: cfg.ranges
+                        };
+
+                        renderOptions(data.inputs);
+
+                        // Update state explicitly just in case
+                        state.options = cfg.options || {};
+                        state.ranges = cfg.ranges || {};
+
+                        updateBacktestSummary();
+                    }
+                })
+                .catch(e => console.error('Failed to restore options:', e));
+        }
+    }
+
+    // Update UI
+    step3.classList.remove('hidden');
+    resultsTableBody.innerHTML = '';
+
+    // Render results
+    if (job.results) {
+        job.results.forEach(r => addResultRow(r));
+    }
+
+    // Update status
+    if (job.status === 'running' || job.status === 'pending') {
+        statusMessage.textContent = 'Resuming backtest...';
+        runBacktestBtn.disabled = true;
+        runBacktestBtn.textContent = 'Running Backtest...';
+        stopBacktestBtn.classList.remove('hidden');
+
+        // Reconnect WebSocket
+        connectWebSocket(job.id);
+    } else {
+        statusMessage.textContent = `Loaded job from ${new Date(job.startTime).toLocaleString()}`;
+        if (job.status === 'completed') {
+            statusMessage.style.color = '#4CAF50';
+        } else if (job.status === 'failed') {
+            statusMessage.style.color = '#ff4444';
+        }
+        resetButtons();
+    }
+
+    // Save ID to local storage so it persists on reload
+    localStorage.setItem('currentJobId', job.id);
+}
+
+function connectWebSocket(jobId) {
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${wsProtocol}//${window.location.host}`);
+
+    ws.onopen = () => {
+        console.log('WebSocket connected (reconnect)');
+        ws.send(JSON.stringify({ type: 'subscribe', jobId }));
+    };
+
+    ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === 'progress') {
+            statusMessage.textContent = `Progress: ${msg.current}/${msg.total} (${msg.percent}%)`;
+            statusMessage.style.color = '';
+        } else if (msg.type === 'result') {
+            // Avoid duplicates if we already loaded results
+            // But since we just loaded the full list from API, we might get duplicates if we are not careful.
+            // The server sends 'result' for each new result.
+            // If we loaded the job, we have the past results.
+            // We should check if result is already in state.results
+            // Ideally, the server only sends *new* results or we handle dedup.
+            // For simplicity, let's just append for now, or check index.
+
+            // Actually, if we subscribe, the server might replay results?
+            // In server.js: "Replay results if needed, or just let client know it's running"
+            // The current server implementation DOES NOT replay results on subscribe.
+            // It only sends status.
+            // So we are safe. New results will come in as they happen.
+
+            state.results.push(msg.data);
+            addResultRow(msg.data);
+        } else if (msg.type === 'complete') {
+            statusMessage.textContent = '✅ Backtest complete!';
+            statusMessage.style.color = '#4CAF50';
+            resetButtons();
+            ws.close();
+        } else if (msg.type === 'error') {
+            statusMessage.textContent = '❌ Error: ' + msg.message;
+            statusMessage.style.color = '#ff4444';
+            resetButtons();
+            ws.close();
+        }
+    };
+
+    ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        statusMessage.textContent = 'Connection error';
+    };
+}
+
 
 async function fetchConfig() {
     try {
@@ -623,43 +874,13 @@ async function runBacktest() {
 
         const jobId = data.jobId;
         state.currentJobId = jobId; // Store for stop functionality
+        localStorage.setItem('currentJobId', jobId); // Persist for auto-resume
         console.log('Job started:', jobId);
 
         // Connect to WebSocket
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${wsProtocol}//${window.location.host}`);
+        connectWebSocket(jobId);
 
-        ws.onopen = () => {
-            console.log('WebSocket connected');
-            ws.send(JSON.stringify({ type: 'subscribe', jobId }));
-        };
 
-        ws.onmessage = (event) => {
-            const msg = JSON.parse(event.data);
-
-            if (msg.type === 'progress') {
-                statusMessage.textContent = `Progress: ${msg.current}/${msg.total} (${msg.percent}%)`;
-                statusMessage.style.color = '';
-            } else if (msg.type === 'result') {
-                state.results.push(msg.data);
-                addResultRow(msg.data);
-            } else if (msg.type === 'complete') {
-                statusMessage.textContent = '✅ Backtest complete!';
-                statusMessage.style.color = '#4CAF50';
-                resetButtons();
-                ws.close();
-            } else if (msg.type === 'error') {
-                statusMessage.textContent = '❌ Error: ' + msg.message;
-                statusMessage.style.color = '#ff4444';
-                resetButtons();
-                ws.close();
-            }
-        };
-
-        ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
-            statusMessage.textContent = 'Connection error';
-        };
 
     } catch (error) {
         statusMessage.textContent = '❌ Error: ' + error.message;
@@ -673,6 +894,7 @@ function resetButtons() {
     runBacktestBtn.textContent = 'Run Backtest';
     stopBacktestBtn.classList.add('hidden');
     state.currentJobId = null;
+    localStorage.removeItem('currentJobId'); // Clear active job
 }
 
 async function stopBacktest() {

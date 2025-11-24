@@ -17,6 +17,7 @@
         <header>
             <h1 id="appTitle">TradingView Backtester</h1>
             <p id="appSubtitle">Automated strategy testing with range analysis</p>
+            <button id="historyBtn" class="btn secondary history-btn">📜 History</button>
         </header>
 
         <main>
@@ -231,6 +232,32 @@
                         </table>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- History Modal -->
+    <div id="historyModal" class="modal hidden">
+        <div class="modal-content history-modal-content">
+            <div class="modal-header">
+                <h2>Backtest History</h2>
+                <button class="close-btn" id="closeHistoryBtn">&times;</button>
+            </div>
+            <div class="history-list-container">
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Status</th>
+                            <th>Symbols</th>
+                            <th>Results</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyTableBody">
+                        <!-- History items injected here -->
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
