@@ -27,6 +27,21 @@ SESSION=votre_sessionid
 SIGNATURE=votre_signature
 ```
 
+### 🔍 Récupérer l'INDICATOR_ID
+
+L'INDICATOR_ID est l'identifiant unique (Pine ID) de votre indicateur ou stratégie TradingView.  
+Le format est généralement : `PUB;[chaîne_alphanumérique]`  
+**Exemple :** `PUB;a220effaf2a2472aa8f95c1c1fb1b5c1`
+
+**Comment le trouver :**
+1. Ouvrez TradingView et cliquez sur le bouton **"Indicators"**
+2. La liste de tous les indicateurs disponibles s'affiche
+3. Ouvrez les **Developer Tools** de votre navigateur (F12)
+4. Activez l'**Inspecteur d'éléments** (icône de curseur en haut à gauche des DevTools)
+5. Cliquez sur le **nom de l'indicateur** que vous voulez utiliser dans la liste
+6. Dans le code HTML affiché, cherchez l'attribut contenant l'ID (généralement `data-id`, `data-script-id` ou similaire)
+7. Vous trouverez l'ID au format `PUB;xxxxx...`
+
 ## 🚀 Lancer le serveur
 
 ```bash
