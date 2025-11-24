@@ -405,11 +405,15 @@ window.toggleRange = (key, checked) => {
         if (!state.ranges[key]) {
             const currentVal = state.options[key];
             if (typeof currentVal === 'number') {
+                // Helper to fix floating point issues
+                const fix = (n) => parseFloat(n.toPrecision(10));
+
+                // Match the defaults shown in renderOptions
                 state.ranges[key] = {
                     active: true,
                     min: currentVal,
-                    max: currentVal + 10,
-                    step: 1
+                    max: fix(currentVal + (currentVal === 0 ? 10 : currentVal * 2)),
+                    step: fix(currentVal === 0 ? 1 : currentVal / 10)
                 };
             } else {
                 // Boolean optimization (just a flag)
