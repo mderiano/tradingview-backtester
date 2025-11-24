@@ -963,12 +963,15 @@ function renderEquityChart(report) {
             return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
         });
 
-        // If equity array is longer than trades (includes intermediate data points), 
-        // interpolate labels or use indices for extra points
+        // Reverse labels to match equity order (Oldest -> Newest)
+        labels.reverse();
+
+        // If equity array is longer than trades (includes initial capital), 
+        // prepend empty labels to align
         if (equity.length > labels.length) {
             const extraPoints = equity.length - labels.length;
             for (let i = 0; i < extraPoints; i++) {
-                labels.push('');
+                labels.unshift(''); // Prepend to start
             }
         }
     } else {
@@ -1156,7 +1159,7 @@ function renderTradesTab(report) {
 
         return `
             <tr>
-                <td>${index + 1}</td>
+                <td>${trades.length - index}</td>
                 <td>${type.toUpperCase()}</td>
                 <td><small>${formatDateTime(trade.entry?.time)}</small></td>
                 <td>${trade.entry?.value?.toFixed(5) || 'N/A'}</td>
