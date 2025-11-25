@@ -10,6 +10,7 @@ const state = {
 
 // DOM Elements
 const indicatorIdInput = document.getElementById('indicatorId');
+const discoveredContainer = document.getElementById('discoveredContainer'); // New container
 const fetchOptionsBtn = document.getElementById('fetchOptionsBtn');
 const step2 = document.getElementById('step2');
 const step3 = document.getElementById('step3');
@@ -337,9 +338,45 @@ async function fetchConfig() {
             // Fetch options immediately
             await fetchOptions();
         }
+
+        // Render Discovered Indicators
+        if (config.discoveredIndicators && config.discoveredIndicators.length > 0) {
+            renderDiscoveredIndicators(config.discoveredIndicators);
+        }
     } catch (e) {
         console.error('Failed to load config:', e);
     }
+}
+
+function renderDiscoveredIndicators(indicators) {
+    if (!discoveredContainer) return;
+
+    discoveredContainer.innerHTML = '<h3>Active Strategies (from Extension)</h3>';
+    const list = document.createElement('div');
+    list.className = 'discovered-list';
+
+    indicators.forEach(ind => {
+        const item = document.createElement('div');
+        item.className = 'discovered-item';
+        item.innerHTML = `
+            <div class="name">${ind.name}</div>
+            <div class="meta">${ind.type} • v${ind.version}</div>
+            <div class="id">${ind.id}</div>
+        `;
+        item.onclick = () => {
+            indicatorIdInput.value = ind.id;
+            // Highlight effect
+            indicatorIdInput.style.borderColor = '#2962ff';
+            setTimeout(() => indicatorIdInput.style.borderColor = '', 1000);
+
+            // Auto-fetch
+            fetchOptions();
+        };
+        list.appendChild(item);
+    });
+
+    discoveredContainer.appendChild(list);
+    discoveredContainer.classList.remove('hidden');
 }
 
 // LocalStorage functions

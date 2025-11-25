@@ -119,7 +119,20 @@ function broadcast(jobId, message) {
     });
 }
 
+const cors = require('cors');
+
 // Middleware
+// Configure CORS explicitly for Chrome extension
+app.use(cors({
+    origin: '*', // Allow all origins (including chrome-extension://)
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// Handle preflight requests
+app.options('*', cors());
+
 app.use(express.static('public'));
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
@@ -129,18 +142,45 @@ app.use((req, res, next) => {
 });
 app.use(express.static('public'));
 
-// Check credentials
+// Check credentials - WARN ONLY
 if (!process.env.SESSION || !process.env.SIGNATURE) {
-    console.error('❌ Error: TradingView credentials not found in .env file!');
-    process.exit(1);
+    console.warn('⚠️  Warning: TradingView credentials not found in .env file.');
+    console.warn('    You must sync via the Chrome Extension to run backtests.');
 }
+
+// Store discovered indicators from extension
+let discoveredIndicators = [];
+
+// API: Sync Credentials & Indicators (from Extension)
+app.post('/api/sync', (req, res) => {
+    const { session, signature, indicators } = req.body;
+
+    if (!session) {
+        return res.status(400).send('Missing session');
+    }
+
+    // Update credentials in memory
+    process.env.SESSION = session;
+    if (signature) process.env.SIGNATURE = signature;
+
+    // Update indicators
+    if (indicators && Array.isArray(indicators)) {
+        discoveredIndicators = indicators;
+        console.log(`🔄 Synced: Auth updated & ${indicators.length} indicators found.`);
+    } else {
+        console.log('🔄 Synced: Auth updated.');
+    }
+
+    res.json({ success: true, message: 'Synced successfully' });
+});
 
 // API: Get Config
 app.get('/api/config', (req, res) => {
     res.json({
         appTitle: process.env.APP_TITLE || 'TradingView Backtester',
         appSubtitle: process.env.APP_SUBTITLE || 'Automated strategy testing with range analysis',
-        indicatorId: process.env.INDICATOR_ID || ''
+        indicatorId: process.env.INDICATOR_ID || '',
+        discoveredIndicators: discoveredIndicators // Return discovered indicators
     });
 });
 
@@ -282,6 +322,11 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
 
         console.log(`Job ${jobId}: Starting ${totalTests} tests`);
         broadcast(jobId, { type: 'info', message: `Starting ${totalTests} tests...` });
+
+        // Runtime Credential Check
+        if (!process.env.SESSION || !process.env.SIGNATURE) {
+            throw new Error('Missing TradingView credentials. Please sync via the Chrome Extension.');
+        }
 
         let completedTests = 0;
 
@@ -661,6 +706,7 @@ app.post('/api/export', async (req, res) => {
 });
 
 // Start server
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Also accessible at http://127.0.0.1:${PORT}`);
 });
