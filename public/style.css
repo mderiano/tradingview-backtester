@@ -1,8 +1,14 @@
-/* History Button */
-.history-btn {
+/* Header Actions */
+.header-actions {
     position: absolute;
     top: 20px;
     right: 20px;
+    display: flex;
+    gap: 1rem;
+}
+
+.history-btn {
+    position: static; /* Reset absolute positioning as it's now in flex container */
 }
 
 /* History Modal */
@@ -980,10 +986,7 @@ tbody tr:hover td:first-child::before {
 /* Discovered Indicators */
 .discovered-container {
     margin-top: 1rem;
-    padding: 1rem;
-    background-color: rgba(41, 98, 255, 0.05);
-    border: 1px solid rgba(41, 98, 255, 0.2);
-    border-radius: 8px;
+    /* Removed background and border for cleaner look */
 }
 
 .discovered-list {
@@ -994,19 +997,35 @@ tbody tr:hover td:first-child::before {
 }
 
 .discovered-item {
-    background-color: var(--input-bg);
-    padding: 1.25rem;
-    border-radius: 8px;
-    border: 2px solid var(--border-color);
+    background-color: var(--card-bg); /* Match card bg to blend in */
+    padding: 1.5rem;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
     transition: all 0.2s;
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    cursor: pointer; /* Make it look clickable */
+    position: relative;
 }
 
 .discovered-item:hover {
     border-color: var(--accent-color);
     background-color: rgba(41, 98, 255, 0.05);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Add an arrow hint on hover */
+.discovered-item:hover::after {
+    content: '→';
+    position: absolute;
+    right: 1.5rem;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 1.5rem;
+    color: var(--accent-color);
+    font-weight: bold;
 }
 
 .indicator-info {

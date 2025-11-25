@@ -13,6 +13,18 @@
         "https://*.tradingview.com/*",
         "http://freebox.deriano.fr:3000/*"
     ],
+    "content_scripts": [
+        {
+            "matches": [
+                "http://freebox.deriano.fr:3000/*",
+                "http://localhost:*/*"
+            ],
+            "js": [
+                "content-script.js"
+            ],
+            "run_at": "document_idle"
+        }
+    ],
     "content_security_policy": {
         "extension_pages": "script-src 'self'; object-src 'self'"
     },
@@ -21,7 +33,10 @@
     },
     "action": {
         "default_popup": "popup.html",
-        "default_popup_script": ["config.js", "popup.js"],
+        "default_popup_script": [
+            "config.js",
+            "popup.js"
+        ],
         "default_icon": {
             "16": "icons/icon16.png",
             "48": "icons/icon48.png",

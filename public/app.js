@@ -5,7 +5,8 @@ const state = {
     ranges: {},  // Stores range configs: { key: { active: true, min, max, step } }
     results: [],
     inputMetadata: {}, // Stores input names: { in_0: 'Stop Loss %', in_1: 'Take Profit %', ... }
-    currentJobId: null
+    currentJobId: null,
+    session: null // Store session for history filtering
 };
 
 // DOM Elements
@@ -24,6 +25,7 @@ const resultsTableBody = document.querySelector('#resultsTable tbody');
 
 const statusMessage = document.getElementById('statusMessage');
 const clearSettingsBtn = document.getElementById('clearSettingsBtn');
+const loadSavedSettingsBtn = document.getElementById('loadSavedSettingsBtn');
 
 // History Elements
 const historyBtn = document.getElementById('historyBtn');
@@ -36,7 +38,13 @@ historyBtn.addEventListener('click', openHistoryModal);
 closeHistoryBtn.addEventListener('click', () => historyModal.classList.add('hidden'));
 runBacktestBtn.addEventListener('click', runBacktest);
 stopBacktestBtn.addEventListener('click', stopBacktest);
+stopBacktestBtn.addEventListener('click', stopBacktest);
 clearSettingsBtn.addEventListener('click', clearSettings);
+loadSavedSettingsBtn.addEventListener('click', () => {
+    if (state.indicatorId && window.currentIndicatorObj) {
+        loadIndicatorWithLocalValues(window.currentIndicatorObj);
+    }
+});
 
 addSymbolBtn.addEventListener('click', handleAddSymbol);
 newSymbolInput.addEventListener('keypress', (e) => {
@@ -66,7 +74,7 @@ function initializeDateInputs() {
 document.addEventListener('DOMContentLoaded', async () => {
     initializeDateInputs();
     loadSettings();
-    await restoreCredentials(); // Restore TradingView credentials from localStorage
+    // restoreCredentials(); // REMOVED: Server no longer stores credentials
     await fetchConfig();
 
     // Attach timeframe listeners after DOM is ready
@@ -78,7 +86,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Check for active job to restore
     checkActiveJob();
-    
+
     // Listen for sync data loaded from extension
     window.addEventListener('tvBacktestSyncLoaded', (event) => {
         console.log('🔄 Sync data loaded event received:', event.detail);
@@ -89,37 +97,40 @@ document.addEventListener('DOMContentLoaded', async () => {
 // Auto-load data from sync
 function autoLoadFromSync(syncData) {
     if (!syncData) return;
-    
+
+    // Ensure data is saved to localStorage for other functions (like fetchHistory)
+    localStorage.setItem('tvBacktestSyncData', JSON.stringify(syncData));
+
     console.log('🚀 Auto-loading from sync data...');
-    
+
     // Ensure step1 is visible when syncing from extension
     const step1 = document.getElementById('step1');
     if (step1) step1.classList.remove('hidden');
-    
+
     // Update server state with session/signature
     if (syncData.session) {
         process.env = process.env || {};
         console.log('✅ Session available from sync');
     }
-    
+
     // If we have indicators, auto-load the first one
     if (syncData.indicators && syncData.indicators.length > 0) {
         const firstIndicator = syncData.indicators[0];
         console.log('📊 Auto-loading indicator:', firstIndicator.name);
-        
+
         // Store globally for access
         window.chartContext = {
             symbol: syncData.symbol || '',
             timeframe: syncData.timeframe || ''
         };
-        
+
         // Show notification
         if (statusMessage) {
             statusMessage.textContent = `🔄 Auto-loaded from extension: ${firstIndicator.name}`;
             statusMessage.className = 'status-message success';
             setTimeout(() => statusMessage.textContent = '', 5000);
         }
-        
+
         // Auto-load with TradingView values
         setTimeout(() => {
             loadIndicatorWithTVValues(firstIndicator);
@@ -135,7 +146,7 @@ async function restoreCredentials() {
         console.log('⚠️ No credentials found in localStorage');
         return;
     }
-    
+
     try {
         const syncData = JSON.parse(syncDataStr);
         if (syncData.session) {
@@ -149,7 +160,7 @@ async function restoreCredentials() {
                     signature: syncData.signature
                 })
             });
-            
+
             if (response.ok) {
                 console.log('✅ Credentials restored from localStorage');
             } else {
@@ -200,7 +211,24 @@ async function openHistoryModal() {
 async function fetchHistory() {
     historyTableBody.innerHTML = '<tr><td colspan="5">Loading...</td></tr>';
     try {
-        const res = await fetch('/api/jobs');
+        // Get session from localStorage to filter history
+        const headers = {};
+        const syncDataStr = localStorage.getItem('tvBacktestSyncData');
+        if (syncDataStr) {
+            try {
+                const syncData = JSON.parse(syncDataStr);
+                if (syncData.session) {
+                    headers['x-session-id'] = syncData.session;
+                    console.log('✅ fetchHistory: Using session from localStorage');
+                }
+            } catch (e) { }
+        }
+
+        if (!headers['x-session-id']) {
+            console.warn('⚠️ fetchHistory: No session found in localStorage');
+        }
+
+        const res = await fetch('/api/jobs', { headers });
         const jobs = await res.json();
         renderHistory(jobs);
     } catch (e) {
@@ -317,6 +345,20 @@ function restoreJob(job) {
 
     // Update UI
     step3.classList.remove('hidden');
+
+    // Show header buttons
+    historyBtn.classList.remove('hidden');
+    // Check if we have saved settings to show the button
+    const saved = localStorage.getItem('backtestSettings');
+    if (saved) {
+        try {
+            const settings = JSON.parse(saved);
+            if (settings.indicatorId === state.indicatorId) {
+                loadSavedSettingsBtn.classList.remove('hidden');
+            }
+        } catch (e) { }
+    }
+
     resultsTableBody.innerHTML = '';
 
     // Render results
@@ -398,6 +440,165 @@ function connectWebSocket(jobId) {
     };
 }
 
+async function runBacktest() {
+    if (!state.indicatorId) {
+        alert('Please select an indicator first.');
+        return;
+    }
+    if (state.symbols.length === 0) {
+        alert('Please add at least one symbol.');
+        return;
+    }
+
+    const selectedTimeframes = Array.from(document.querySelectorAll('input[name="timeframe"]:checked')).map(cb => cb.value);
+    if (selectedTimeframes.length === 0) {
+        alert('Please select at least one timeframe.');
+        return;
+    }
+
+    statusMessage.textContent = 'Starting backtest...';
+    statusMessage.className = 'status-message info';
+    runBacktestBtn.disabled = true;
+    runBacktestBtn.textContent = 'Running Backtest...';
+    stopBacktestBtn.classList.remove('hidden');
+    resultsTableBody.innerHTML = '';
+    state.results = []; // Clear previous results
+
+    // Get credentials from localStorage
+    let session = null;
+    let signature = null;
+    const syncDataStr = localStorage.getItem('tvBacktestSyncData');
+    if (syncDataStr) {
+        try {
+            const syncData = JSON.parse(syncDataStr);
+            session = syncData.session;
+            signature = syncData.signature;
+        } catch (e) {
+            console.error('Error parsing syncData from localStorage:', e);
+        }
+    }
+
+    try {
+        const response = await fetch('/api/backtest', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                indicatorId: state.indicatorId,
+                symbols: state.symbols,
+                timeframes: selectedTimeframes,
+                options: state.options,
+                ranges: state.ranges,
+                dateFrom: dateFromInput.value,
+                dateTo: dateToInput.value,
+                session: session, // Include session
+                signature: signature // Include signature
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.message || 'Failed to start backtest');
+        }
+
+        const job = await response.json();
+        state.currentJobId = job.id;
+        localStorage.setItem('currentJobId', job.id);
+        connectWebSocket(job.id);
+
+        statusMessage.textContent = 'Backtest started. Waiting for results...';
+        statusMessage.className = 'status-message info';
+
+        saveSettings(); // Save current settings after starting backtest
+
+    } catch (error) {
+        console.error('Backtest error:', error);
+        statusMessage.textContent = `❌ Error: ${error.message}`;
+        statusMessage.className = 'status-message error';
+        resetButtons();
+    }
+}
+
+async function stopBacktest() {
+    if (!state.currentJobId) {
+        alert('No active backtest to stop.');
+        return;
+    }
+
+    statusMessage.textContent = 'Stopping backtest...';
+    statusMessage.className = 'status-message info';
+    stopBacktestBtn.disabled = true;
+
+    try {
+        const response = await fetch(`/api/jobs/${state.currentJobId}/stop`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.message || 'Failed to stop backtest');
+        }
+
+        statusMessage.textContent = 'Backtest stopped.';
+        statusMessage.className = 'status-message warning';
+        resetButtons();
+    } catch (error) {
+        console.error('Stop backtest error:', error);
+        statusMessage.textContent = `❌ Error stopping backtest: ${error.message}`;
+        statusMessage.className = 'status-message error';
+        resetButtons();
+    }
+}
+
+async function fetchOptions() {
+    if (!state.indicatorId) {
+        optionsContainer.innerHTML = '<p>Please select an indicator.</p>';
+        return;
+    }
+
+    optionsContainer.innerHTML = '<p>Loading options...</p>';
+    step2.classList.remove('hidden');
+    step3.classList.add('hidden'); // Hide step 3 until options are loaded
+
+    // Get credentials from localStorage
+    let session = null;
+    let signature = null;
+    const syncDataStr = localStorage.getItem('tvBacktestSyncData');
+    if (syncDataStr) {
+        try {
+            const syncData = JSON.parse(syncDataStr);
+            session = syncData.session;
+            signature = syncData.signature;
+        } catch (e) {
+            console.error('Error parsing syncData from localStorage:', e);
+        }
+    }
+
+    const headers = {
+        'Content-Type': 'application/json',
+    };
+    if (session) headers['x-session-id'] = session;
+    if (signature) headers['x-signature'] = signature;
+
+    try {
+        const res = await fetch(`/api/indicator?id=${encodeURIComponent(state.indicatorId)}`, { headers });
+        if (!res.ok) {
+            const errorData = await res.json();
+            throw new Error(errorData.message || 'Failed to fetch indicator options');
+        }
+        const data = await res.json();
+        renderOptions(data.inputs);
+        updateBacktestSummary();
+        saveSettings(); // Save settings after loading new indicator
+    } catch (e) {
+        console.error('Error fetching options:', e);
+        optionsContainer.innerHTML = `<p class="negative">Error loading options: ${e.message}</p>`;
+    }
+}
 
 async function fetchConfig() {
     try {
@@ -414,6 +615,12 @@ async function fetchConfig() {
             // Note: fetchOptions will be called when user clicks load button
         }
 
+        // Store session if available - REMOVED: Server no longer returns session
+        // if (config.session) {
+        //     state.session = config.session;
+        //     console.log('✅ Session loaded from config');
+        // }
+
         // Render Discovered Indicators
         if (config.discoveredIndicators && config.discoveredIndicators.length > 0) {
             // Store chart context globally
@@ -429,61 +636,23 @@ function renderDiscoveredIndicators(indicators) {
     if (!discoveredContainer) return;
 
     discoveredContainer.innerHTML = '<h3>Active Strategies (from Extension)</h3>';
-    
+
     const list = document.createElement('div');
     list.className = 'discovered-list';
 
     indicators.forEach(ind => {
         const item = document.createElement('div');
         item.className = 'discovered-item';
-        
+        item.onclick = () => loadIndicatorWithTVValues(ind);
+
         // Create indicator info section
         const infoDiv = document.createElement('div');
         infoDiv.className = 'indicator-info';
         infoDiv.innerHTML = `
             <div class="name">${ind.name}</div>
         `;
-        
-        // Create buttons section
-        const buttonsDiv = document.createElement('div');
-        buttonsDiv.className = 'indicator-buttons';
-        
-        // Load with TradingView values button
-        const tvBtn = document.createElement('button');
-        tvBtn.className = 'load-btn tv-load';
-        tvBtn.textContent = '📊 Load from TradingView';
-        tvBtn.title = 'Load with current values from TradingView (symbol, timeframe, inputs)';
-        tvBtn.onclick = (e) => {
-            e.stopPropagation();
-            loadIndicatorWithTVValues(ind);
-        };
-        
-        buttonsDiv.appendChild(tvBtn);
-        
-        // Check if saved settings exist for this indicator
-        const saved = localStorage.getItem('backtestSettings');
-        if (saved) {
-            try {
-                const settings = JSON.parse(saved);
-                if (settings.indicatorId === ind.id && settings.options) {
-                    // Load with localStorage values button (only show if data exists)
-                    const localBtn = document.createElement('button');
-                    localBtn.className = 'load-btn local-load';
-                    localBtn.textContent = '💾 Load Saved Settings';
-                    localBtn.title = 'Load with previously saved values from this browser';
-                    localBtn.onclick = (e) => {
-                        e.stopPropagation();
-                        loadIndicatorWithLocalValues(ind);
-                    };
-                    buttonsDiv.appendChild(localBtn);
-                }
-            } catch (e) {
-                console.warn('Error checking saved settings:', e);
-            }
-        }
-        
+
         item.appendChild(infoDiv);
-        item.appendChild(buttonsDiv);
         list.appendChild(item);
     });
 
@@ -494,9 +663,25 @@ function renderDiscoveredIndicators(indicators) {
 // Load indicator with TradingView values
 function loadIndicatorWithTVValues(indicator) {
     console.log('Loading with TradingView values:', indicator);
-    
+
     state.indicatorId = indicator.id;
-    
+    window.currentIndicatorObj = indicator; // Store for "Load Saved Settings" button
+
+    // Show History Button
+    historyBtn.classList.remove('hidden');
+
+    // Check if we should show "Load Saved Settings" button
+    loadSavedSettingsBtn.classList.add('hidden');
+    const saved = localStorage.getItem('backtestSettings');
+    if (saved) {
+        try {
+            const settings = JSON.parse(saved);
+            if (settings.indicatorId === indicator.id) {
+                loadSavedSettingsBtn.classList.remove('hidden');
+            }
+        } catch (e) { }
+    }
+
     // Convert TradingView inputs to options format
     const tvOptions = {};
     if (indicator.inputs && Array.isArray(indicator.inputs)) {
@@ -507,16 +692,16 @@ function loadIndicatorWithTVValues(indicator) {
             }
         });
     }
-    
+
     // Store TradingView values in global variable so renderOptions can use them
     window.savedOptionsAndRanges = {
         indicatorId: indicator.id,
         options: tvOptions,
         ranges: {} // No ranges from TradingView
     };
-    
+
     console.log('Prepared TradingView options:', tvOptions);
-    
+
     // Load symbol from chartContext if available
     if (window.chartContext && window.chartContext.symbol) {
         const symbol = window.chartContext.symbol;
@@ -525,7 +710,7 @@ function loadIndicatorWithTVValues(indicator) {
         renderSymbols();
         console.log('Loaded symbol from TradingView:', symbol);
     }
-    
+
     // Load timeframe from chartContext if available
     if (window.chartContext && window.chartContext.timeframe) {
         const timeframe = window.chartContext.timeframe;
@@ -544,14 +729,14 @@ function loadIndicatorWithTVValues(indicator) {
             }
         }, 100);
     }
-    
+
     // Show status message
     if (statusMessage) {
         statusMessage.textContent = `📊 Loading ${indicator.name} with TradingView values...`;
         statusMessage.className = 'status-message success';
         setTimeout(() => statusMessage.textContent = '', 3000);
     }
-    
+
     // Fetch options - will use window.savedOptionsAndRanges
     fetchOptions();
 }
@@ -559,9 +744,15 @@ function loadIndicatorWithTVValues(indicator) {
 // Load indicator with localStorage values
 function loadIndicatorWithLocalValues(indicator) {
     console.log('Loading with localStorage values for:', indicator.id);
-    
+
     state.indicatorId = indicator.id;
-    
+    window.currentIndicatorObj = indicator;
+
+    // Show History Button
+    historyBtn.classList.remove('hidden');
+    // Ensure Load Saved Settings is visible since we just loaded from it
+    loadSavedSettingsBtn.classList.remove('hidden');
+
     // Restore from localStorage
     const saved = localStorage.getItem('backtestSettings');
     if (saved) {
@@ -585,14 +776,14 @@ function loadIndicatorWithLocalValues(indicator) {
     } else {
         window.savedOptionsAndRanges = null;
     }
-    
+
     // Show status message
     if (statusMessage) {
         statusMessage.textContent = `💾 Loading ${indicator.name} with saved values...`;
         statusMessage.className = 'status-message success';
         setTimeout(() => statusMessage.textContent = '', 3000);
     }
-    
+
     // Fetch options and then apply localStorage values
     fetchOptions();
 }
@@ -634,9 +825,11 @@ function loadSettings() {
             state.indicatorId = settings.indicatorId;
             state.indicatorName = settings.indicatorName || 'Saved Strategy';
             state.activeSource = 'saved';
-            
-            // Render saved indicator in step1
-            renderSavedIndicator(settings);
+
+            state.activeSource = 'saved';
+
+            // Note: We no longer render saved indicator in step1 as UI has changed
+            // renderSavedIndicator(settings);
         }
 
         // Restore symbols
@@ -750,7 +943,25 @@ async function fetchOptions() {
     }
 
     try {
-        const response = await fetch(`/api/indicator?id=${encodeURIComponent(id)}`);
+        // Get credentials from localStorage
+        const syncDataStr = localStorage.getItem('tvBacktestSyncData');
+        if (!syncDataStr) {
+            throw new Error('No credentials found. Please use the Chrome Extension to sync your TradingView session.');
+        }
+
+        const syncData = JSON.parse(syncDataStr);
+        if (!syncData.session || !syncData.signature) {
+            throw new Error('Incomplete credentials. Please re-sync using the Chrome Extension.');
+        }
+
+        console.log('✅ Using credentials from localStorage');
+
+        const response = await fetch(`/api/indicator?id=${encodeURIComponent(id)}`, {
+            headers: {
+                'x-session-id': syncData.session,
+                'x-signature': syncData.signature
+            }
+        });
         const data = await response.json();
 
         if (data.error) throw new Error(data.error);
@@ -762,8 +973,8 @@ async function fetchOptions() {
     } catch (error) {
         alert('Error fetching options: ' + error.message);
     } finally {
-        fetchOptionsBtn.disabled = false;
-        fetchOptionsBtn.textContent = 'Fetch Options';
+        // fetchOptionsBtn.disabled = false;
+        // fetchOptionsBtn.textContent = 'Fetch Options';
     }
 }
 
@@ -1101,6 +1312,17 @@ async function runBacktest() {
     saveSettings();
 
     try {
+        // Get credentials from localStorage
+        const syncDataStr = localStorage.getItem('tvBacktestSyncData');
+        if (!syncDataStr) {
+            throw new Error('No credentials found. Please sync via the Chrome Extension.');
+        }
+
+        const syncData = JSON.parse(syncDataStr);
+        if (!syncData.session || !syncData.signature) {
+            throw new Error('Missing credentials. Please sync via the Chrome Extension.');
+        }
+
         const payload = {
             indicatorId: state.indicatorId,
             options: state.options,
@@ -1109,7 +1331,9 @@ async function runBacktest() {
             timeframes,
             inputMetadata: state.inputMetadata, // Send readable names to backend
             dateFrom: dateFromInput.value,
-            dateTo: dateToInput.value
+            dateTo: dateToInput.value,
+            session: syncData.session,
+            signature: syncData.signature
         };
 
         // Debug: Log the ranges being sent
@@ -1147,12 +1371,12 @@ async function runBacktest() {
         statusMessage.textContent = '❌ Error: ' + errorMsg;
         statusMessage.style.color = '#ff4444';
         statusMessage.className = 'status-message error';
-        
+
         // Show alert for credential errors
         if (errorMsg.includes('credentials') || errorMsg.includes('Chrome Extension')) {
             alert('⚠️ ' + errorMsg + '\n\nPlease sync again using the Chrome Extension.');
         }
-        
+
         resetButtons();
     }
 }

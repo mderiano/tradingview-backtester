@@ -1,44 +1,62 @@
 // Sync bridge script - loads data from chrome.storage.local to page localStorage
-(function() {
-    console.log('🔄 Sync bridge: Checking for stored TradingView data...');
-    
-    // Check if chrome extension API is available
+(function () {
+
+    // Listen for messages from content script
+    window.addEventListener('message', function (event) {
+        // Only accept messages from same origin
+        if (event.source !== window) return;
+
+        if (event.data.type === 'TV_BACKTEST_SYNC_DATA') {
+            try {
+                const syncData = event.data.data;
+                localStorage.setItem('tvBacktestSyncData', JSON.stringify(syncData));
+
+                // Trigger custom event for app.js
+                window.dispatchEvent(new CustomEvent('tvBacktestSyncLoaded', {
+                    detail: syncData
+                }));
+            } catch (e) {
+                console.error('❌ Failed to save sync data:', e);
+            }
+        }
+    });
+
+    // Check if chrome extension API is available (fallback, shouldn't happen with content script)
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.get(['tvBacktestSync'], function(result) {
+        chrome.storage.local.get(['tvBacktestSync'], function (result) {
             if (result.tvBacktestSync) {
-                console.log('📥 Found sync data in chrome.storage:', result.tvBacktestSync);
-                
-                // Store in localStorage for the web page to access
                 try {
-                    localStorage.setItem('tvBacktestSync', JSON.stringify(result.tvBacktestSync));
-                    console.log('✅ Sync data transferred to localStorage');
-                    
-                    // Trigger a custom event to notify the app
+                    localStorage.setItem('tvBacktestSyncData', JSON.stringify(result.tvBacktestSync));
                     window.dispatchEvent(new CustomEvent('tvBacktestSyncLoaded', {
                         detail: result.tvBacktestSync
                     }));
                 } catch (e) {
                     console.error('❌ Failed to transfer sync data:', e);
                 }
-            } else {
-                console.log('ℹ️ No sync data found in chrome.storage');
             }
         });
     } else {
-        // Not running in extension context, check localStorage directly
-        const syncData = localStorage.getItem('tvBacktestSync');
-        if (syncData) {
-            console.log('📥 Found sync data in localStorage');
+        // Check localStorage for existing data
+        let syncDataStr = localStorage.getItem('tvBacktestSyncData');
+
+        if (!syncDataStr) {
+            // Try legacy key
+            const legacyData = localStorage.getItem('tvBacktestSync');
+            if (legacyData) {
+                localStorage.setItem('tvBacktestSyncData', legacyData);
+                syncDataStr = legacyData;
+            }
+        }
+
+        if (syncDataStr) {
             try {
-                const data = JSON.parse(syncData);
+                const data = JSON.parse(syncDataStr);
                 window.dispatchEvent(new CustomEvent('tvBacktestSyncLoaded', {
                     detail: data
                 }));
             } catch (e) {
                 console.error('❌ Failed to parse sync data:', e);
             }
-        } else {
-            console.log('ℹ️ No sync data found in localStorage');
         }
     }
 })();

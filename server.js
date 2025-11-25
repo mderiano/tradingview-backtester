@@ -143,10 +143,8 @@ app.use((req, res, next) => {
 app.use(express.static('public'));
 
 // Check credentials - WARN ONLY
-if (!process.env.SESSION || !process.env.SIGNATURE) {
-    console.warn('⚠️  Warning: TradingView credentials not found in .env file.');
-    console.warn('    You must sync via the Chrome Extension to run backtests.');
-}
+// Note: We now rely on client-side credentials passed with each request.
+// process.env.SESSION/SIGNATURE are no longer used as primary source.
 
 // Store discovered indicators from extension
 let discoveredIndicators = [];
@@ -160,15 +158,16 @@ app.post('/api/sync', (req, res) => {
         return res.status(400).send('Missing session');
     }
 
-    // Update credentials in memory
-    process.env.SESSION = session;
-    if (signature) process.env.SIGNATURE = signature;
+    // Update credentials in memory - NO LONGER USED
+    // process.env.SESSION = session;
+    // if (signature) process.env.SIGNATURE = signature;
+    // We now rely on client sending credentials with each request.
 
     // Update indicators with TradingView data
     if (indicators && Array.isArray(indicators)) {
         discoveredIndicators = indicators;
         console.log(`🔄 Synced: Auth updated & ${indicators.length} indicators found.`);
-        
+
         // Store TradingView chart parameters
         if (symbol) {
             chartContext.symbol = symbol;
@@ -178,7 +177,7 @@ app.post('/api/sync', (req, res) => {
             chartContext.timeframe = timeframe;
             console.log(`⏰ Chart timeframe: ${timeframe}`);
         }
-        
+
         // Log indicator inputs for debugging
         indicators.forEach(ind => {
             if (ind.inputs && Object.keys(ind.inputs).length > 0) {
@@ -199,8 +198,8 @@ app.post('/api/sync', (req, res) => {
         syncedAt: new Date().toISOString()
     };
 
-    res.json({ 
-        success: true, 
+    res.json({
+        success: true,
         message: 'Synced successfully',
         receivedData: {
             indicatorCount: indicators?.length || 0,
@@ -211,22 +210,8 @@ app.post('/api/sync', (req, res) => {
     });
 });
 
-// Restore credentials from localStorage (on page reload)
-app.post('/api/restore-credentials', (req, res) => {
-    const { session, signature } = req.body;
-
-    if (!session) {
-        return res.status(400).json({ error: 'Missing session' });
-    }
-
-    // Update credentials in memory
-    process.env.SESSION = session;
-    if (signature) process.env.SIGNATURE = signature;
-
-    console.log('🔄 Credentials restored from localStorage');
-
-    res.json({ success: true });
-});
+// Restore credentials endpoint REMOVED - Client manages credentials
+// app.post('/api/restore-credentials', ...)
 
 // API: Get Config
 app.get('/api/config', (req, res) => {
@@ -235,7 +220,8 @@ app.get('/api/config', (req, res) => {
         appSubtitle: process.env.APP_SUBTITLE || 'Automated strategy testing with range analysis',
         indicatorId: process.env.INDICATOR_ID || '',
         discoveredIndicators: discoveredIndicators, // Return discovered indicators
-        chartContext: chartContext // Return symbol and timeframe
+        chartContext: chartContext, // Return symbol and timeframe
+        // session: process.env.SESSION // REMOVED: Client must provide session
     });
 });
 
@@ -248,11 +234,18 @@ app.get('/api/indicator', async (req, res) => {
         }
         console.log(`Fetching options for indicator: ${indicatorId}`);
 
+        const session = req.headers['x-session-id'];
+        const signature = req.headers['x-signature'];
+
+        if (!session || !signature) {
+            return res.status(401).json({ error: 'Missing TradingView credentials (x-session-id, x-signature)' });
+        }
+
         const indicator = await TradingView.getIndicator(
             indicatorId,
             'last',
-            process.env.SESSION,
-            process.env.SIGNATURE
+            session,
+            signature
         );
 
         if (!indicator || !indicator.inputs) {
@@ -365,7 +358,7 @@ function cleanErrorMessage(err) {
 }
 
 // Async Backtest Runner
-async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo }) {
+async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo, session, signature }) {
     const job = jobs.get(jobId);
     job.status = 'running';
     saveJob(jobId); // Save initial state
@@ -379,7 +372,7 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
         broadcast(jobId, { type: 'info', message: `Starting ${totalTests} tests...` });
 
         // Runtime Credential Check
-        if (!process.env.SESSION || !process.env.SIGNATURE) {
+        if (!session || !signature) {
             throw new Error('Missing TradingView credentials. Please sync via the Chrome Extension.');
         }
 
@@ -388,8 +381,8 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
         // Create a shared client for this batch using Deep Backtesting (Premium only)
         // This uses TradingView's history-data server for deep historical data
         const client = new TradingView.Client({
-            token: process.env.SESSION,
-            signature: process.env.SIGNATURE,
+            token: session,
+            signature: signature,
             server: 'history-data', // Premium feature - deep backtesting
         });
 
@@ -410,8 +403,8 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
                         const strategy = await TradingView.getIndicator(
                             indicatorId,
                             'last',
-                            process.env.SESSION,
-                            process.env.SIGNATURE
+                            session,
+                            signature
                         );
 
                         // Set options
@@ -565,7 +558,11 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
 // API: Start Backtest (Async)
 app.post('/api/backtest', (req, res) => {
     try {
-        const { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo } = req.body;
+        const { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo, session, signature } = req.body;
+
+        if (!session || !signature) {
+            return res.status(401).json({ error: 'Missing TradingView credentials' });
+        }
 
         const jobId = crypto.randomUUID();
         jobs.set(jobId, {
@@ -573,12 +570,13 @@ app.post('/api/backtest', (req, res) => {
             status: 'pending',
             config: { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo },
             results: [],
-            startTime: Date.now()
+            startTime: Date.now(),
+            session: session // Save session to filter history later
         });
 
         // Start job in background
         saveJob(jobId); // Save pending state
-        runBacktestJob(jobId, { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo });
+        runBacktestJob(jobId, { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo, session, signature });
 
         res.json({ jobId, message: 'Backtest started' });
 
@@ -615,6 +613,9 @@ app.post('/api/backtest/:jobId/cancel', (req, res) => {
 app.get('/api/jobs', (req, res) => {
     try {
         const files = fs.readdirSync(RESULTS_DIR);
+        const currentSession = req.headers['x-session-id'];
+        console.log(`🔍 /api/jobs: Requesting history. Session: ${currentSession ? currentSession.substring(0, 10) + '...' : 'NONE'}`);
+
         const jobSummaries = files
             .filter(f => f.endsWith('.json') || f.endsWith('.json.gz'))
             .map(f => {
@@ -622,12 +623,17 @@ app.get('/api/jobs', (req, res) => {
                     const filePath = path.join(RESULTS_DIR, f);
                     const stats = fs.statSync(filePath);
 
-                    // If it's a gz file, we can't easily read the content without unzipping, 
-                    // so we might just return basic info or try to read a bit.
-                    // For now, let's assume we only list .json files for detailed info, 
-                    // or we just list them as "Archived".
-
                     if (f.endsWith('.json.gz')) {
+                        // For archived files, we can't easily check session without unzipping.
+                        // For now, we'll exclude them if a session is provided to be safe,
+                        // or include them if we assume they are old and public?
+                        // The requirement says "n'affiche que les results de la personne concerné".
+                        // Safest is to exclude if we can't verify.
+                        // Or maybe we should just return them and let client decide?
+                        // But client logic is "if session matches".
+                        // Let's skip archived for now if we are filtering.
+                        if (currentSession) return null;
+
                         return {
                             id: f.replace('.json.gz', ''),
                             date: stats.mtime,
@@ -639,6 +645,14 @@ app.get('/api/jobs', (req, res) => {
 
                     const content = fs.readFileSync(filePath, 'utf8');
                     const job = JSON.parse(content);
+
+                    // Filter by session
+                    // Enforce strict filtering: only show jobs that match the current session.
+                    // If user has a session, they see only their jobs.
+                    // If user has NO session (guest), they see only guest jobs (no session).
+                    // This hides legacy/guest jobs from authenticated users, and vice versa.
+                    if (job.session !== currentSession) return null;
+
                     return {
                         id: job.id,
                         date: new Date(job.startTime),
