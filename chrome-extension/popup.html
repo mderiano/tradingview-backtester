@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <style>
+        body {
+            width: 320px;
+            padding: 15px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #131722;
+            color: #d1d4dc;
+        }
+
+        h2 {
+            margin-top: 0;
+            font-size: 16px;
+            color: #fff;
+        }
+
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            margin-top: 15px;
+            background-color: #2962ff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .btn:hover {
+            background-color: #1e53e5;
+        }
+
+        .btn:disabled {
+            background-color: #434651;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            display: none;
+        }
+
+        .status.success {
+            background-color: rgba(76, 175, 80, 0.1);
+            color: #4caf50;
+            border: 1px solid #4caf50;
+        }
+
+        .status.error {
+            background-color: rgba(244, 67, 54, 0.1);
+            color: #f44336;
+            border: 1px solid #f44336;
+        }
+
+        .info {
+            font-size: 12px;
+            color: #787b86;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>TV Backtest Helper</h2>
+    <div class="info">
+        Open a TradingView chart with your strategy, then click Sync to send your session and indicators to the local
+        backtester.
+    </div>
+
+    <button id="syncBtn" class="btn">Sync with Backtester</button>
+
+    <div id="status" class="status"></div>
+
+    <script src="config.js"></script>
+    <script src="popup.js"></script>
+</body>
+
+</html>

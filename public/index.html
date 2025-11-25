@@ -24,14 +24,6 @@
             <!-- Step 1: Indicator Selection -->
             <section class="card" id="step1">
                 <h2>Select Indicator</h2>
-                <div class="input-group">
-                    <label for="indicatorId">Indicator ID (Public or Private)</label>
-                    <div class="row">
-                        <input type="text" id="indicatorId" placeholder="e.g., PUB;a220effaf2a2472aa8f95c1c1fb1b5c1"
-                            value="PUB;a220effaf2a2472aa8f95c1c1fb1b5c1">
-                        <button id="fetchOptionsBtn" class="btn primary">Fetch Options</button>
-                    </div>
-                </div>
                 <!-- Discovered Indicators Container -->
                 <div id="discoveredContainer" class="discovered-container hidden"></div>
             </section>
@@ -264,6 +256,7 @@
         </div>
     </div>
 
+    <script src="sync-bridge.js"></script>
     <script src="app.js"></script>
 </body>
 

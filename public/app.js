@@ -9,9 +9,7 @@ const state = {
 };
 
 // DOM Elements
-const indicatorIdInput = document.getElementById('indicatorId');
-const discoveredContainer = document.getElementById('discoveredContainer'); // New container
-const fetchOptionsBtn = document.getElementById('fetchOptionsBtn');
+const discoveredContainer = document.getElementById('discoveredContainer');
 const step2 = document.getElementById('step2');
 const step3 = document.getElementById('step3');
 const optionsContainer = document.getElementById('optionsContainer');
@@ -36,7 +34,6 @@ const historyTableBody = document.getElementById('historyTableBody');
 // Event Listeners
 historyBtn.addEventListener('click', openHistoryModal);
 closeHistoryBtn.addEventListener('click', () => historyModal.classList.add('hidden'));
-fetchOptionsBtn.addEventListener('click', fetchOptions);
 runBacktestBtn.addEventListener('click', runBacktest);
 stopBacktestBtn.addEventListener('click', stopBacktest);
 clearSettingsBtn.addEventListener('click', clearSettings);
@@ -69,14 +66,100 @@ function initializeDateInputs() {
 document.addEventListener('DOMContentLoaded', async () => {
     initializeDateInputs();
     loadSettings();
+    await restoreCredentials(); // Restore TradingView credentials from localStorage
     await fetchConfig();
 
     // Attach timeframe listeners after DOM is ready
     attachTimeframeListeners();
 
+    // Always ensure step1 is visible on page load
+    const step1 = document.getElementById('step1');
+    if (step1) step1.classList.remove('hidden');
+
     // Check for active job to restore
     checkActiveJob();
+    
+    // Listen for sync data loaded from extension
+    window.addEventListener('tvBacktestSyncLoaded', (event) => {
+        console.log('🔄 Sync data loaded event received:', event.detail);
+        autoLoadFromSync(event.detail);
+    });
 });
+
+// Auto-load data from sync
+function autoLoadFromSync(syncData) {
+    if (!syncData) return;
+    
+    console.log('🚀 Auto-loading from sync data...');
+    
+    // Ensure step1 is visible when syncing from extension
+    const step1 = document.getElementById('step1');
+    if (step1) step1.classList.remove('hidden');
+    
+    // Update server state with session/signature
+    if (syncData.session) {
+        process.env = process.env || {};
+        console.log('✅ Session available from sync');
+    }
+    
+    // If we have indicators, auto-load the first one
+    if (syncData.indicators && syncData.indicators.length > 0) {
+        const firstIndicator = syncData.indicators[0];
+        console.log('📊 Auto-loading indicator:', firstIndicator.name);
+        
+        // Store globally for access
+        window.chartContext = {
+            symbol: syncData.symbol || '',
+            timeframe: syncData.timeframe || ''
+        };
+        
+        // Show notification
+        if (statusMessage) {
+            statusMessage.textContent = `🔄 Auto-loaded from extension: ${firstIndicator.name}`;
+            statusMessage.className = 'status-message success';
+            setTimeout(() => statusMessage.textContent = '', 5000);
+        }
+        
+        // Auto-load with TradingView values
+        setTimeout(() => {
+            loadIndicatorWithTVValues(firstIndicator);
+        }, 500);
+    }
+}
+
+// Restore TradingView credentials from localStorage
+async function restoreCredentials() {
+    // Check if we have sync data in localStorage
+    const syncDataStr = localStorage.getItem('tvBacktestSyncData');
+    if (!syncDataStr) {
+        console.log('⚠️ No credentials found in localStorage');
+        return;
+    }
+    
+    try {
+        const syncData = JSON.parse(syncDataStr);
+        if (syncData.session) {
+            console.log('🔄 Restoring credentials to server...');
+            // Send credentials to server
+            const response = await fetch('/api/restore-credentials', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session: syncData.session,
+                    signature: syncData.signature
+                })
+            });
+            
+            if (response.ok) {
+                console.log('✅ Credentials restored from localStorage');
+            } else {
+                console.warn('⚠️ Failed to restore credentials');
+            }
+        }
+    } catch (e) {
+        console.error('Error restoring credentials:', e);
+    }
+}
 
 async function checkActiveJob() {
     const savedJobId = localStorage.getItem('currentJobId');
@@ -178,9 +261,7 @@ function restoreJob(job) {
         // Restore Indicator ID
         if (cfg.indicatorId) {
             state.indicatorId = cfg.indicatorId;
-            indicatorIdInput.value = cfg.indicatorId;
-            // Hide step 1 if we have an ID
-            document.getElementById('step1').classList.add('hidden');
+            // Keep step1 visible so user can change indicator if needed
             step2.classList.remove('hidden');
         }
 
@@ -329,18 +410,14 @@ async function fetchConfig() {
 
         // Auto-load if indicator ID is set
         if (config.indicatorId) {
-            const step1 = document.getElementById('step1');
-            step1.classList.add('hidden'); // Hide Step 1
-
-            indicatorIdInput.value = config.indicatorId;
             state.indicatorId = config.indicatorId;
-
-            // Fetch options immediately
-            await fetchOptions();
+            // Note: fetchOptions will be called when user clicks load button
         }
 
         // Render Discovered Indicators
         if (config.discoveredIndicators && config.discoveredIndicators.length > 0) {
+            // Store chart context globally
+            window.chartContext = config.chartContext || {};
             renderDiscoveredIndicators(config.discoveredIndicators);
         }
     } catch (e) {
@@ -352,31 +429,172 @@ function renderDiscoveredIndicators(indicators) {
     if (!discoveredContainer) return;
 
     discoveredContainer.innerHTML = '<h3>Active Strategies (from Extension)</h3>';
+    
     const list = document.createElement('div');
     list.className = 'discovered-list';
 
     indicators.forEach(ind => {
         const item = document.createElement('div');
         item.className = 'discovered-item';
-        item.innerHTML = `
+        
+        // Create indicator info section
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'indicator-info';
+        infoDiv.innerHTML = `
             <div class="name">${ind.name}</div>
-            <div class="meta">${ind.type} • v${ind.version}</div>
-            <div class="id">${ind.id}</div>
         `;
-        item.onclick = () => {
-            indicatorIdInput.value = ind.id;
-            // Highlight effect
-            indicatorIdInput.style.borderColor = '#2962ff';
-            setTimeout(() => indicatorIdInput.style.borderColor = '', 1000);
-
-            // Auto-fetch
-            fetchOptions();
+        
+        // Create buttons section
+        const buttonsDiv = document.createElement('div');
+        buttonsDiv.className = 'indicator-buttons';
+        
+        // Load with TradingView values button
+        const tvBtn = document.createElement('button');
+        tvBtn.className = 'load-btn tv-load';
+        tvBtn.textContent = '📊 Load from TradingView';
+        tvBtn.title = 'Load with current values from TradingView (symbol, timeframe, inputs)';
+        tvBtn.onclick = (e) => {
+            e.stopPropagation();
+            loadIndicatorWithTVValues(ind);
         };
+        
+        buttonsDiv.appendChild(tvBtn);
+        
+        // Check if saved settings exist for this indicator
+        const saved = localStorage.getItem('backtestSettings');
+        if (saved) {
+            try {
+                const settings = JSON.parse(saved);
+                if (settings.indicatorId === ind.id && settings.options) {
+                    // Load with localStorage values button (only show if data exists)
+                    const localBtn = document.createElement('button');
+                    localBtn.className = 'load-btn local-load';
+                    localBtn.textContent = '💾 Load Saved Settings';
+                    localBtn.title = 'Load with previously saved values from this browser';
+                    localBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        loadIndicatorWithLocalValues(ind);
+                    };
+                    buttonsDiv.appendChild(localBtn);
+                }
+            } catch (e) {
+                console.warn('Error checking saved settings:', e);
+            }
+        }
+        
+        item.appendChild(infoDiv);
+        item.appendChild(buttonsDiv);
         list.appendChild(item);
     });
 
     discoveredContainer.appendChild(list);
     discoveredContainer.classList.remove('hidden');
+}
+
+// Load indicator with TradingView values
+function loadIndicatorWithTVValues(indicator) {
+    console.log('Loading with TradingView values:', indicator);
+    
+    state.indicatorId = indicator.id;
+    
+    // Convert TradingView inputs to options format
+    const tvOptions = {};
+    if (indicator.inputs && Array.isArray(indicator.inputs)) {
+        indicator.inputs.forEach(input => {
+            // Only include actual indicator inputs (in_0, in_1, etc.)
+            if (input.id && input.id.startsWith('in_')) {
+                tvOptions[input.id] = input.value;
+            }
+        });
+    }
+    
+    // Store TradingView values in global variable so renderOptions can use them
+    window.savedOptionsAndRanges = {
+        indicatorId: indicator.id,
+        options: tvOptions,
+        ranges: {} // No ranges from TradingView
+    };
+    
+    console.log('Prepared TradingView options:', tvOptions);
+    
+    // Load symbol from chartContext if available
+    if (window.chartContext && window.chartContext.symbol) {
+        const symbol = window.chartContext.symbol;
+        // Clear existing symbols and add TradingView symbol
+        state.symbols = [symbol];
+        renderSymbols();
+        console.log('Loaded symbol from TradingView:', symbol);
+    }
+    
+    // Load timeframe from chartContext if available
+    if (window.chartContext && window.chartContext.timeframe) {
+        const timeframe = window.chartContext.timeframe;
+        // Wait for DOM to be ready and check the corresponding timeframe
+        setTimeout(() => {
+            const timeframeCheckbox = document.querySelector(`input[name="timeframe"][value="${timeframe}"]`);
+            if (timeframeCheckbox) {
+                // Uncheck all timeframes first
+                document.querySelectorAll('input[name="timeframe"]').forEach(cb => cb.checked = false);
+                // Check the TradingView timeframe
+                timeframeCheckbox.checked = true;
+                updateBacktestSummary();
+                console.log('Loaded timeframe from TradingView:', timeframe);
+            } else {
+                console.warn('Timeframe not found in checkboxes:', timeframe);
+            }
+        }, 100);
+    }
+    
+    // Show status message
+    if (statusMessage) {
+        statusMessage.textContent = `📊 Loading ${indicator.name} with TradingView values...`;
+        statusMessage.className = 'status-message success';
+        setTimeout(() => statusMessage.textContent = '', 3000);
+    }
+    
+    // Fetch options - will use window.savedOptionsAndRanges
+    fetchOptions();
+}
+
+// Load indicator with localStorage values
+function loadIndicatorWithLocalValues(indicator) {
+    console.log('Loading with localStorage values for:', indicator.id);
+    
+    state.indicatorId = indicator.id;
+    
+    // Restore from localStorage
+    const saved = localStorage.getItem('backtestSettings');
+    if (saved) {
+        try {
+            const settings = JSON.parse(saved);
+            if (settings.indicatorId === indicator.id) {
+                window.savedOptionsAndRanges = {
+                    indicatorId: indicator.id,
+                    options: settings.options || {},
+                    ranges: settings.ranges || {}
+                };
+                console.log('Loaded localStorage values:', settings.options);
+            } else {
+                // Different indicator, clear saved values
+                window.savedOptionsAndRanges = null;
+            }
+        } catch (e) {
+            console.error('Error parsing localStorage:', e);
+            window.savedOptionsAndRanges = null;
+        }
+    } else {
+        window.savedOptionsAndRanges = null;
+    }
+    
+    // Show status message
+    if (statusMessage) {
+        statusMessage.textContent = `💾 Loading ${indicator.name} with saved values...`;
+        statusMessage.className = 'status-message success';
+        setTimeout(() => statusMessage.textContent = '', 3000);
+    }
+    
+    // Fetch options and then apply localStorage values
+    fetchOptions();
 }
 
 // LocalStorage functions
@@ -413,7 +631,12 @@ function loadSettings() {
 
         // Restore indicator ID
         if (settings.indicatorId) {
-            indicatorIdInput.value = settings.indicatorId;
+            state.indicatorId = settings.indicatorId;
+            state.indicatorName = settings.indicatorName || 'Saved Strategy';
+            state.activeSource = 'saved';
+            
+            // Render saved indicator in step1
+            renderSavedIndicator(settings);
         }
 
         // Restore symbols
@@ -520,11 +743,11 @@ window.removeSymbol = (symbol) => {
 
 // --- OPTIONS FETCHING & RENDERING ---
 async function fetchOptions() {
-    const id = indicatorIdInput.value.trim();
-    if (!id) return alert('Please enter an Indicator ID');
-
-    fetchOptionsBtn.disabled = true;
-    fetchOptionsBtn.textContent = 'Loading...';
+    const id = state.indicatorId;
+    if (!id) {
+        console.error('No indicator ID in state');
+        return;
+    }
 
     try {
         const response = await fetch(`/api/indicator?id=${encodeURIComponent(id)}`);
@@ -920,8 +1143,16 @@ async function runBacktest() {
 
 
     } catch (error) {
-        statusMessage.textContent = '❌ Error: ' + error.message;
+        const errorMsg = error.message || 'Unknown error';
+        statusMessage.textContent = '❌ Error: ' + errorMsg;
         statusMessage.style.color = '#ff4444';
+        statusMessage.className = 'status-message error';
+        
+        // Show alert for credential errors
+        if (errorMsg.includes('credentials') || errorMsg.includes('Chrome Extension')) {
+            alert('⚠️ ' + errorMsg + '\n\nPlease sync again using the Chrome Extension.');
+        }
+        
         resetButtons();
     }
 }

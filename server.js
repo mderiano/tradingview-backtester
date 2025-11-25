@@ -150,10 +150,11 @@ if (!process.env.SESSION || !process.env.SIGNATURE) {
 
 // Store discovered indicators from extension
 let discoveredIndicators = [];
+let chartContext = { symbol: '', timeframe: '' }; // Store current chart context
 
 // API: Sync Credentials & Indicators (from Extension)
 app.post('/api/sync', (req, res) => {
-    const { session, signature, indicators } = req.body;
+    const { session, signature, indicators, symbol, timeframe } = req.body;
 
     if (!session) {
         return res.status(400).send('Missing session');
@@ -163,15 +164,68 @@ app.post('/api/sync', (req, res) => {
     process.env.SESSION = session;
     if (signature) process.env.SIGNATURE = signature;
 
-    // Update indicators
+    // Update indicators with TradingView data
     if (indicators && Array.isArray(indicators)) {
         discoveredIndicators = indicators;
         console.log(`🔄 Synced: Auth updated & ${indicators.length} indicators found.`);
+        
+        // Store TradingView chart parameters
+        if (symbol) {
+            chartContext.symbol = symbol;
+            console.log(`📊 Chart symbol: ${symbol}`);
+        }
+        if (timeframe) {
+            chartContext.timeframe = timeframe;
+            console.log(`⏰ Chart timeframe: ${timeframe}`);
+        }
+        
+        // Log indicator inputs for debugging
+        indicators.forEach(ind => {
+            if (ind.inputs && Object.keys(ind.inputs).length > 0) {
+                console.log(`📝 ${ind.name} inputs:`, ind.inputs);
+            }
+        });
     } else {
         console.log('🔄 Synced: Auth updated.');
     }
 
-    res.json({ success: true, message: 'Synced successfully' });
+    // Prepare data for localStorage (to be sent to client)
+    const syncData = {
+        session,
+        signature,
+        indicators: discoveredIndicators,
+        symbol: chartContext.symbol,
+        timeframe: chartContext.timeframe,
+        syncedAt: new Date().toISOString()
+    };
+
+    res.json({ 
+        success: true, 
+        message: 'Synced successfully',
+        receivedData: {
+            indicatorCount: indicators?.length || 0,
+            hasSymbol: !!symbol,
+            hasTimeframe: !!timeframe
+        },
+        syncData // Return data to be stored in localStorage
+    });
+});
+
+// Restore credentials from localStorage (on page reload)
+app.post('/api/restore-credentials', (req, res) => {
+    const { session, signature } = req.body;
+
+    if (!session) {
+        return res.status(400).json({ error: 'Missing session' });
+    }
+
+    // Update credentials in memory
+    process.env.SESSION = session;
+    if (signature) process.env.SIGNATURE = signature;
+
+    console.log('🔄 Credentials restored from localStorage');
+
+    res.json({ success: true });
 });
 
 // API: Get Config
@@ -180,7 +234,8 @@ app.get('/api/config', (req, res) => {
         appTitle: process.env.APP_TITLE || 'TradingView Backtester',
         appSubtitle: process.env.APP_SUBTITLE || 'Automated strategy testing with range analysis',
         indicatorId: process.env.INDICATOR_ID || '',
-        discoveredIndicators: discoveredIndicators // Return discovered indicators
+        discoveredIndicators: discoveredIndicators, // Return discovered indicators
+        chartContext: chartContext // Return symbol and timeframe
     });
 });
 

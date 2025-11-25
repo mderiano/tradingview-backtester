@@ -3,3 +3,5 @@ tools/
 .env
 *.log
 results/
+chrome-extension.crx
+chrome-extension.pem
