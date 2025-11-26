@@ -8,17 +8,23 @@
     <link rel="stylesheet" href="style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 
 <body>
+    <div class="bg-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+        <div class="blob blob-3"></div>
+    </div>
     <div class="container">
         <header>
             <h1 id="appTitle">TradingView Backtester</h1>
             <p id="appSubtitle">Automated strategy testing with range analysis</p>
             <div class="header-actions">
-                <button id="loadSavedSettingsBtn" class="btn secondary hidden" title="Load saved settings for this indicator">💾 Load Saved Settings</button>
+                <button id="loadSavedSettingsBtn" class="btn secondary hidden"
+                    title="Load saved settings for this indicator">💾 Load Saved Settings</button>
                 <button id="historyBtn" class="btn secondary history-btn hidden">📜 History</button>
             </div>
         </header>
