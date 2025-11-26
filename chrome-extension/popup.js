@@ -29,29 +29,35 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
         let indicators = [];
         let symbol = '';
         let timeframe = '';
+
+        // Store session/signature to pass into the function
+        const sessionValue = sessionCookie.value;
+        const signatureValue = signCookie ? signCookie.value : '';
+
         try {
             const results = await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 world: 'MAIN',
-                func: () => {
+                args: [sessionValue, signatureValue], // Pass as arguments
+                func: (session, signature) => {
                     try {
                         console.log("🔍 TV Backtest Helper: Starting extraction (Main World)...");
 
                         // Helper to explore and find the chart widget
                         function getChartWidget() {
                             console.log("Debug: Exploring TradingView structure...");
-                            
+
                             // Log what's available
                             console.log("Debug: window.TV exists?", !!window.TV);
                             console.log("Debug: window.TradingView exists?", !!window.TradingView);
                             console.log("Debug: window.TradingViewApi exists?", !!window.TradingViewApi);
-                            
+
                             // Method 0: TradingViewApi (NEW - found in your test)
                             if (window.TradingViewApi && typeof window.TradingViewApi.activeChart === 'function') {
                                 console.log("Debug: Using window.TradingViewApi.activeChart()");
                                 return window.TradingViewApi.activeChart();
                             }
-                            
+
                             // Try to find tvWidget in global scope
                             if (window.tvWidget) {
                                 console.log("Debug: Found window.tvWidget");
@@ -76,7 +82,7 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                             // Method 3: Search for iframe widgets
                             const iframes = document.querySelectorAll('iframe');
                             console.log("Debug: Found", iframes.length, "iframes");
-                            
+
                             // Method 4: Look for chart container and try to find widget from DOM
                             const chartContainer = document.querySelector('.chart-container, [class*="chart"], [data-role="chart"]');
                             if (chartContainer) {
@@ -96,7 +102,7 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                                             if (chart) return chart;
                                         }
                                         // Check if it IS a chart
-                                        if (typeof obj.getAllStudies === 'function' || 
+                                        if (typeof obj.getAllStudies === 'function' ||
                                             typeof obj.getAllShapes === 'function' ||
                                             (typeof obj.model === 'function')) {
                                             console.log(`Debug: Found chart-like object at window.${key}`);
@@ -122,16 +128,16 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                         // Extract chart parameters
                         let symbol = '';
                         let timeframe = '';
-                        
+
                         try {
                             if (typeof chartWidget.symbol === 'function') {
                                 symbol = chartWidget.symbol();
                                 console.log("Debug: Extracted symbol:", symbol);
                             }
-                        } catch (e) { 
-                            console.warn("Error getting symbol:", e); 
+                        } catch (e) {
+                            console.warn("Error getting symbol:", e);
                         }
-                        
+
                         try {
                             if (typeof chartWidget.resolution === 'function') {
                                 timeframe = chartWidget.resolution();
@@ -140,8 +146,8 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                                 timeframe = chartWidget.interval();
                                 console.log("Debug: Extracted timeframe (via interval):", timeframe);
                             }
-                        } catch (e) { 
-                            console.warn("Error getting timeframe:", e); 
+                        } catch (e) {
+                            console.warn("Error getting timeframe:", e);
                         }
 
                         let allStudies = {};
@@ -192,12 +198,12 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                             if (typeof chartWidget.model === 'function') {
                                 let model = chartWidget.model();
                                 console.log("Debug: Got model:", !!model);
-                                
+
                                 if (model && typeof model.model === 'function') {
                                     model = model.model();
                                     console.log("Debug: Got nested model:", !!model);
                                 }
-                                
+
                                 if (model && typeof model.dataSources === 'function') {
                                     const sources = model.dataSources();
                                     console.log("Debug: model.dataSources() returned", sources ? sources.length : 0, "items");
@@ -217,7 +223,7 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                         Object.keys(allStudies).forEach(id => {
                             const study = allStudies[id];
                             console.log("Debug: Processing study:", id, study);
-                            
+
                             // Try to get metaInfo in various ways
                             let meta = null;
                             let metaSource = null;
@@ -239,7 +245,7 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                                         metaSource = "study.properties().metaInfo";
                                     }
                                 }
-                                
+
                                 // Try getStudyById if we have the chartWidget
                                 if (!meta && study.id && chartWidget && typeof chartWidget.getStudyById === 'function') {
                                     const fullStudy = chartWidget.getStudyById(study.id);
@@ -264,14 +270,14 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                                         }
                                     }
                                 }
-                                
+
                                 // Try nested properties
                                 if (!meta && study._study && typeof study._study.metaInfo === 'function') {
                                     meta = study._study.metaInfo();
                                     metaSource = "study._study.metaInfo()";
                                 }
-                            } catch (e) { 
-                                console.warn("Error getting metaInfo for", id, e.message); 
+                            } catch (e) {
+                                console.warn("Error getting metaInfo for", id, e.message);
                             }
 
                             // If we have meta, extract info
@@ -279,24 +285,157 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                                 console.log("Debug: Found metaInfo via", metaSource, ":", meta);
                                 const isStrategy = meta.isStrategy || meta.is_strategy || meta.type === 'Strategy';
                                 const scriptId = meta.scriptIdPart || meta.id || meta.scriptId;
-                                
-                                // Extract inputs for this indicator
-                                let inputs = {};
+
+                                // Extract raw input values for this indicator
+                                let rawInputValues = {};
                                 try {
                                     const fullStudy = chartWidget.getStudyById(study.id);
                                     if (fullStudy) {
                                         if (typeof fullStudy.getInputValues === 'function') {
-                                            inputs = fullStudy.getInputValues();
-                                            console.log("Debug: Extracted inputs via getInputValues():", inputs);
+                                            rawInputValues = fullStudy.getInputValues();
+                                            console.log("Debug: Extracted raw input values via getInputValues():", rawInputValues);
                                         } else if (fullStudy._study && fullStudy._study._inputs) {
-                                            inputs = fullStudy._study._inputs;
-                                            console.log("Debug: Extracted inputs via _study._inputs:", inputs);
+                                            rawInputValues = fullStudy._study._inputs;
+                                            console.log("Debug: Extracted raw input values via _study._inputs:", rawInputValues);
                                         }
                                     }
                                 } catch (e) {
                                     console.warn("Error getting inputs for", study.id, e);
                                 }
-                                
+
+                                // Merge raw values with metaInfo to create enriched inputs
+                                const enrichedInputs = {};
+                                if (meta && meta.inputs && Array.isArray(meta.inputs)) {
+                                    meta.inputs.forEach(inputDef => {
+                                        const inputId = inputDef.id;
+
+                                        // Use CURRENT value from TV (what user set), fallback to defval
+                                        const currentValue = rawInputValues.hasOwnProperty(inputId)
+                                            ? rawInputValues[inputId]
+                                            : inputDef.defval;
+
+                                        enrichedInputs[inputId] = {
+                                            id: inputId,
+                                            value: currentValue,  // Current from TV, NOT defval
+                                            name: inputDef.name || inputId,
+                                            type: inputDef.type || 'text',
+                                            defval: inputDef.defval,
+                                            step: inputDef.step,
+                                            min: inputDef.min,
+                                            max: inputDef.max,
+                                            tooltip: inputDef.tooltip || '',
+                                            isHidden: inputDef.isHidden || false,
+                                            group: inputDef.group || null,
+                                            groupId: inputDef.groupId || null,
+                                            internalID: inputDef.internalID || null,
+                                            options: inputDef.options || null
+                                        };
+                                    });
+                                    console.log(`✅ Created ${Object.keys(enrichedInputs).length} enriched inputs`);
+                                } else {
+                                    // Fallback: use raw values as-is if no metadata
+                                    console.warn("⚠️ No metaInfo.inputs available, using raw values");
+                                    Object.keys(rawInputValues).forEach(key => {
+                                        enrichedInputs[key] = {
+                                            id: key,
+                                            value: rawInputValues[key],
+                                            name: key,
+                                            type: typeof rawInputValues[key],
+                                            defval: rawInputValues[key],
+                                            isHidden: false
+                                        };
+                                    });
+                                }
+
+                                // Build groups structure for THIS indicator
+                                let groups = [];
+
+                                if (meta && meta.inputs && Array.isArray(meta.inputs)) {
+                                    const groupsMap = new Map();
+
+                                    // Helper to map strategy properties to groups
+                                    const strategyPropMap = {
+                                        'initial_capital': 'Capital & Order Size',
+                                        'currency': 'Capital & Order Size',
+                                        'default_qty_value': 'Capital & Order Size',
+                                        'default_qty_type': 'Capital & Order Size',
+                                        'pyramiding': 'Capital & Order Size',
+                                        'commission_value': 'Commission',
+                                        'commission_type': 'Commission',
+                                        'slippage': 'Slippage',
+                                        'margin_long': 'Margin',
+                                        'margin_short': 'Margin',
+                                        'process_orders_on_close': 'Recalculate',
+                                        'calc_on_every_tick': 'Recalculate',
+                                        'calc_on_order_fills': 'Recalculate',
+                                        'backtest_fill_limits_assumption': 'Backtesting',
+                                        'fill_orders_on_standard_ohlc': 'Backtesting',
+                                        'risk_free_rate': 'Risk'
+                                    };
+
+                                    meta.inputs.forEach(input => {
+                                        if (input.isHidden) return;
+
+                                        const inputId = input.id;
+
+                                        // Standard Inputs tab (has 'group' property)
+                                        if (input.group) {
+                                            const groupKey = `inputs_${input.group}`;
+                                            if (!groupsMap.has(groupKey)) {
+                                                groupsMap.set(groupKey, {
+                                                    id: groupKey,
+                                                    name: input.group,
+                                                    tab: 'Inputs',
+                                                    inputs: []
+                                                });
+                                            }
+                                            groupsMap.get(groupKey).inputs.push(inputId);
+                                        }
+                                        // Properties tab (strategy props)
+                                        else if (input.groupId === 'strategy_props') {
+                                            const propId = input.internalID || input.name;
+                                            const groupName = strategyPropMap[propId] || 'Other Properties';
+                                            const groupKey = `props_${groupName}`;
+
+                                            if (!groupsMap.has(groupKey)) {
+                                                groupsMap.set(groupKey, {
+                                                    id: groupKey,
+                                                    name: groupName,
+                                                    tab: 'Properties',
+                                                    inputs: []
+                                                });
+                                            }
+                                            groupsMap.get(groupKey).inputs.push(inputId);
+                                        }
+                                    });
+
+                                    groups = Array.from(groupsMap.values());
+                                    console.log(`✅ Built ${groups.length} groups for ${meta.scriptName || 'indicator'}`);
+                                }
+
+                                // Build tabs - only include tabs that have groups
+                                const tabsWithGroups = new Set(groups.map(g => g.tab));
+                                const allPossibleTabs = [
+                                    { name: "Inputs", active: true },
+                                    { name: "Properties", active: false },
+                                    { name: "Style", active: false },
+                                    { name: "Visibility", active: false }
+                                ];
+
+                                let tabs = allPossibleTabs.filter(tab => tabsWithGroups.has(tab.name));
+
+                                // If no tabs have content, default to Inputs tab
+                                if (tabs.length === 0) {
+                                    tabs = [{ name: "Inputs", active: true }];
+                                } else {
+                                    // Ensure first tab is active
+                                    tabs.forEach((tab, index) => {
+                                        tab.active = index === 0;
+                                    });
+                                }
+
+                                console.log(`✅ Included ${tabs.length} non-empty tabs:`, tabs.map(t => t.name).join(', '));
+
                                 found.push({
                                     id: scriptId || study.id || id,
                                     fullId: meta.id || scriptId,
@@ -304,7 +443,9 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                                     version: meta.version,
                                     type: isStrategy ? 'strategy' : 'study',
                                     instanceId: study.id || id,
-                                    inputs: inputs
+                                    inputs: enrichedInputs,  // Enriched inputs object
+                                    tabs: tabs,              // Per-indicator tabs
+                                    groups: groups          // Per-indicator groups
                                 });
                             } else {
                                 // Fallback: use basic study info if no metaInfo
@@ -323,12 +464,15 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                         });
 
                         console.log("✅ TV Backtest Helper: Extracted indicators:", found);
-                        return { 
+
+                        return {
+                            session: session,
+                            signature: signature,
                             indicators: found,
                             symbol: symbol,
                             timeframe: timeframe
+                            // Note: grouping is now per-indicator (in indicators[].tabs and indicators[].groups)
                         };
-
                     } catch (e) {
                         console.error("❌ TV Backtest Helper: Error", e);
                         return { error: e.message, stack: e.stack };
@@ -346,29 +490,27 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                     console.warn('Extraction error:', res.error);
                 }
             }
-        } catch (e) {
-            console.warn('Script execution failed:', e);
-            throw new Error('Failed to execute script on page. ' + e.message);
-        }
 
-        // 4. Send to Local Server via background worker (not subject to page CSP)
-        const payload = {
-            session: sessionCookie.value,
-            signature: signCookie ? signCookie.value : '',
-            indicators: indicators,
-            symbol: symbol,
-            timeframe: timeframe
-        };
+            // 4. Save to chrome.storage.local directly (Client-side handling)
+            const syncData = {
+                session: sessionCookie.value,
+                signature: signCookie ? signCookie.value : '',
+                indicators: indicators,
+                symbol: symbol,
+                timeframe: timeframe,
+                syncedAt: new Date().toISOString()
+                // Note: grouping is now per-indicator (in indicators[].tabs and indicators[].groups)
+            };
 
-        console.log('📤 Sending to background worker:', payload);
+            console.log('💾 Saving sync data to local storage:', syncData);
 
-        // Get server URL from config
-        const serverUrl = window.BACKTEST_CONFIG?.SERVER_URL || 'http://freebox.deriano.fr:3000';
+            // Get server URL from config
+            const serverUrl = window.BACKTEST_CONFIG?.SERVER_URL || 'http://freebox.deriano.fr:3000';
 
-        // Send message to background worker
-        chrome.runtime.sendMessage(
-            { action: 'syncToServer', payload, serverUrl },
-            (response) => {
+            // Save to chrome.storage.local
+            chrome.storage.local.set({
+                'tvBacktestSync': syncData
+            }, () => {
                 if (chrome.runtime.lastError) {
                     statusDiv.textContent = `❌ Error: ${chrome.runtime.lastError.message}`;
                     statusDiv.className = 'status error';
@@ -378,43 +520,25 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                     return;
                 }
 
-                if (response && response.success) {
-                    console.log('📥 Background response:', response.data);
-                    statusDiv.textContent = `✅ Synced! Found ${indicators.length} indicators. Opening server...`;
-                    statusDiv.className = 'status success';
-                    statusDiv.style.display = 'block';
-                    
-                    // Save sync data to localStorage for persistence
-                    if (response.data.syncData) {
-                        try {
-                            const serverUrl = window.BACKTEST_CONFIG?.SERVER_URL || 'http://freebox.deriano.fr:3000';
-                            const domain = new URL(serverUrl).hostname;
-                            
-                            // Store in chrome.storage.local (accessible across domains)
-                            chrome.storage.local.set({
-                                'tvBacktestSync': response.data.syncData
-                            }, () => {
-                                console.log('💾 Saved sync data to chrome.storage.local');
-                            });
-                        } catch (e) {
-                            console.warn('Failed to save sync data:', e);
-                        }
-                    }
-                    
-                    // Open server in new tab
-                    const serverUrl = window.BACKTEST_CONFIG?.SERVER_URL || 'http://freebox.deriano.fr:3000';
-                    chrome.tabs.create({ url: serverUrl });
-                } else {
-                    statusDiv.textContent = `❌ Error: ${response ? response.error : 'Unknown error'}`;
-                    statusDiv.className = 'status error';
-                    statusDiv.style.display = 'block';
-                }
+                console.log('✅ Data saved to chrome.storage.local');
+                statusDiv.textContent = `✅ Synced! Found ${indicators.length} indicators. Opening server...`;
+                statusDiv.className = 'status success';
+                statusDiv.style.display = 'block';
+
+                // Open server in new tab
+                chrome.tabs.create({ url: serverUrl });
 
                 btn.disabled = false;
                 btn.textContent = 'Sync with Backtester';
-            }
-        );
+            });
 
+        } catch (error) {
+            statusDiv.textContent = `❌ Error: ${error.message}`;
+            statusDiv.className = 'status error';
+            statusDiv.style.display = 'block';
+            btn.disabled = false;
+            btn.textContent = 'Sync with Backtester';
+        }
     } catch (error) {
         statusDiv.textContent = `❌ Error: ${error.message}`;
         statusDiv.className = 'status error';

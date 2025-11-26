@@ -94,19 +94,25 @@ wss.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
             if (data.type === 'subscribe' && data.jobId) {
-                console.log(`Client subscribed to job ${data.jobId}`);
                 ws.jobId = data.jobId;
 
                 // Send current state if job exists
                 const job = jobs.get(data.jobId);
                 if (job) {
                     ws.send(JSON.stringify({ type: 'status', status: job.status }));
-                    // Replay results if needed, or just let client know it's running
                 }
             }
         } catch (e) {
-            console.error('WebSocket message error:', e);
+            console.error('WebSocket parse error:', e);
         }
+    });
+
+    ws.on('close', () => {
+        console.log('Client disconnected');
+    });
+
+    ws.on('error', (error) => {
+        console.error('WebSocket error:', error);
     });
 });
 
@@ -146,191 +152,16 @@ app.use(express.static('public'));
 // Note: We now rely on client-side credentials passed with each request.
 // process.env.SESSION/SIGNATURE are no longer used as primary source.
 
-// Store discovered indicators from extension
-let discoveredIndicators = [];
-let chartContext = { symbol: '', timeframe: '' }; // Store current chart context
+// API: Sync Credentials & Indicators (from Extension) - REMOVED
+// Client now saves directly to chrome.storage.local
 
-// API: Sync Credentials & Indicators (from Extension)
-app.post('/api/sync', (req, res) => {
-    const { session, signature, indicators, symbol, timeframe } = req.body;
+// API: Get Config - REMOVED
+// Client now has hardcoded config and gets indicators from extension
 
-    if (!session) {
-        return res.status(400).send('Missing session');
-    }
+// API: Get Indicator Options - REMOVED
+// Client gets options from extension sync data
 
-    // Update credentials in memory - NO LONGER USED
-    // process.env.SESSION = session;
-    // if (signature) process.env.SIGNATURE = signature;
-    // We now rely on client sending credentials with each request.
-
-    // Update indicators with TradingView data
-    if (indicators && Array.isArray(indicators)) {
-        discoveredIndicators = indicators;
-        console.log(`🔄 Synced: Auth updated & ${indicators.length} indicators found.`);
-
-        // Store TradingView chart parameters
-        if (symbol) {
-            chartContext.symbol = symbol;
-            console.log(`📊 Chart symbol: ${symbol}`);
-        }
-        if (timeframe) {
-            chartContext.timeframe = timeframe;
-            console.log(`⏰ Chart timeframe: ${timeframe}`);
-        }
-
-        // Log indicator inputs for debugging
-        indicators.forEach(ind => {
-            if (ind.inputs && Object.keys(ind.inputs).length > 0) {
-                console.log(`📝 ${ind.name} inputs:`, ind.inputs);
-            }
-        });
-    } else {
-        console.log('🔄 Synced: Auth updated.');
-    }
-
-    // Prepare data for localStorage (to be sent to client)
-    const syncData = {
-        session,
-        signature,
-        indicators: discoveredIndicators,
-        symbol: chartContext.symbol,
-        timeframe: chartContext.timeframe,
-        syncedAt: new Date().toISOString()
-    };
-
-    res.json({
-        success: true,
-        message: 'Synced successfully',
-        receivedData: {
-            indicatorCount: indicators?.length || 0,
-            hasSymbol: !!symbol,
-            hasTimeframe: !!timeframe
-        },
-        syncData // Return data to be stored in localStorage
-    });
-});
-
-// Restore credentials endpoint REMOVED - Client manages credentials
-// app.post('/api/restore-credentials', ...)
-
-// API: Get Config
-app.get('/api/config', (req, res) => {
-    res.json({
-        appTitle: process.env.APP_TITLE || 'TradingView Backtester',
-        appSubtitle: process.env.APP_SUBTITLE || 'Automated strategy testing with range analysis',
-        indicatorId: process.env.INDICATOR_ID || '',
-        discoveredIndicators: discoveredIndicators, // Return discovered indicators
-        chartContext: chartContext, // Return symbol and timeframe
-        // session: process.env.SESSION // REMOVED: Client must provide session
-    });
-});
-
-// API: Get Indicator Options
-app.get('/api/indicator', async (req, res) => {
-    try {
-        const indicatorId = req.query.id;
-        if (!indicatorId) {
-            return res.status(400).json({ error: 'Missing id query parameter' });
-        }
-        console.log(`Fetching options for indicator: ${indicatorId}`);
-
-        const session = req.headers['x-session-id'];
-        const signature = req.headers['x-signature'];
-
-        if (!session || !signature) {
-            return res.status(401).json({ error: 'Missing TradingView credentials (x-session-id, x-signature)' });
-        }
-
-        const indicator = await TradingView.getIndicator(
-            indicatorId,
-            'last',
-            session,
-            signature
-        );
-
-        if (!indicator || !indicator.inputs) {
-            return res.status(404).json({ error: 'Indicator not found or no inputs available' });
-        }
-
-        res.json({ inputs: indicator.inputs });
-    } catch (error) {
-        console.error('Error fetching indicator:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Helper: Generate range values
-function getRangeValues(min, max, step) {
-    const values = [];
-
-    // Validate inputs
-    min = parseFloat(min);
-    max = parseFloat(max);
-    step = parseFloat(step);
-
-    if (isNaN(min) || isNaN(max) || isNaN(step)) {
-        throw new Error('Invalid number in range definition (min, max, or step)');
-    }
-
-    if (step <= 0) {
-        console.warn(`Invalid step value: ${step}, using 1`);
-        step = 1;
-    }
-
-    // Calculate expected array size
-    const steps = Math.round((max - min) / step);
-    const expectedSize = steps + 1;
-
-    // Prevent creating arrays that are too large (max 1000 values per parameter)
-    if (expectedSize > 1000) {
-        throw new Error(`Range too large: ${expectedSize} values (max 1000). Adjust your min/max/step values.`);
-    }
-
-    for (let i = 0; i <= steps; i++) {
-        let val = min + (step * i);
-        // Fix floating point precision (e.g. 0.1 + 0.2 = 0.30000000000000004)
-        val = parseFloat(val.toPrecision(10));
-        values.push(val);
-    }
-
-    return values;
-}
-
-// Helper: Generate Cartesian product of options
-function generateOptionCombinations(baseOptions, ranges) {
-    const keys = Object.keys(baseOptions);
-    const combinations = [{}];
-
-    keys.forEach(key => {
-        let values = [baseOptions[key]];
-
-        // If this key has a range defined, use it
-        if (ranges && ranges[key] && ranges[key].active) {
-            if (typeof baseOptions[key] === 'boolean') {
-                values = [true, false];
-                console.log(`🔧 Range for ${key}: boolean (testing true/false)`);
-            } else {
-                const { min, max, step } = ranges[key];
-                console.log(`🔧 Range for ${key}: min=${min}, max=${max}, step=${step}`);
-                values = getRangeValues(min, max, step);
-                console.log(`  → Generated ${values.length} values: [${values.join(', ')}]`);
-            }
-        }
-
-        const newCombinations = [];
-        combinations.forEach(combo => {
-            values.forEach(val => {
-                newCombinations.push({ ...combo, [key]: val });
-            });
-        });
-
-        // Replace combinations with new expanded list
-        combinations.length = 0;
-        combinations.push(...newCombinations);
-    });
-
-    return combinations;
-}
+// Helper: Clean error messages from TradingView
 
 // Helper: Clean error messages from TradingView
 function cleanErrorMessage(err) {
@@ -358,14 +189,15 @@ function cleanErrorMessage(err) {
 }
 
 // Async Backtest Runner
-async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo, session, signature }) {
+async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timeframes, dateFrom, dateTo, session, signature }) {
     const job = jobs.get(jobId);
     job.status = 'running';
     saveJob(jobId); // Save initial state
     broadcast(jobId, { type: 'status', status: 'running' });
 
     try {
-        const optionCombinations = generateOptionCombinations(options, ranges);
+        // Use client-provided combinations
+        const optionCombinations = combinations;
         const totalTests = symbols.length * timeframes.length * optionCombinations.length;
 
         console.log(`Job ${jobId}: Starting ${totalTests} tests`);
@@ -558,7 +390,7 @@ async function runBacktestJob(jobId, { indicatorId, options, ranges, symbols, ti
 // API: Start Backtest (Async)
 app.post('/api/backtest', (req, res) => {
     try {
-        const { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo, session, signature } = req.body;
+        const { indicatorId, combinations, ranges, symbols, timeframes, dateFrom, dateTo, session, signature } = req.body;
 
         if (!session || !signature) {
             return res.status(401).json({ error: 'Missing TradingView credentials' });
@@ -568,7 +400,7 @@ app.post('/api/backtest', (req, res) => {
         jobs.set(jobId, {
             id: jobId,
             status: 'pending',
-            config: { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo },
+            config: { indicatorId, combinations, ranges, symbols, timeframes, dateFrom, dateTo },
             results: [],
             startTime: Date.now(),
             session: session // Save session to filter history later
@@ -576,9 +408,9 @@ app.post('/api/backtest', (req, res) => {
 
         // Start job in background
         saveJob(jobId); // Save pending state
-        runBacktestJob(jobId, { indicatorId, options, ranges, symbols, timeframes, dateFrom, dateTo, session, signature });
+        runBacktestJob(jobId, { indicatorId, combinations, symbols, timeframes, dateFrom, dateTo, session, signature });
 
-        res.json({ jobId, message: 'Backtest started' });
+        res.json({ id: jobId, message: 'Backtest started' });
 
     } catch (error) {
         console.error('Error starting backtest:', error);

@@ -6,7 +6,13 @@ const state = {
     results: [],
     inputMetadata: {}, // Stores input names: { in_0: 'Stop Loss %', in_1: 'Take Profit %', ... }
     currentJobId: null,
-    session: null // Store session for history filtering
+    session: null, // Store session for history filtering
+    currentIndicator: {  // Current indicator structure with tabs and groups
+        tabs: [],
+        groups: [],
+        inputs: {}
+    },
+    activeTab: 'Inputs'  // Track current active tab
 };
 
 // DOM Elements
@@ -33,11 +39,41 @@ const historyModal = document.getElementById('historyModal');
 const closeHistoryBtn = document.getElementById('closeHistoryBtn');
 const historyTableBody = document.getElementById('historyTableBody');
 
+// LocalStorage helper functions
+function getSyncData() {
+    try {
+        const data = localStorage.getItem('tvBacktestSyncData');
+        return data ? JSON.parse(data) : null;
+    } catch (e) {
+        console.error('Error parsing sync data:', e);
+        return null;
+    }
+}
+
+function getSettings() {
+    try {
+        const data = localStorage.getItem('backtestSettings');
+        return data ? JSON.parse(data) : null;
+    } catch (e) {
+        console.error('Error parsing settings:', e);
+        return null;
+    }
+}
+
+function getCurrentJobId() {
+    return localStorage.getItem('currentJobId');
+}
+
+// Status message helper
+function updateStatus(message, type = 'info') {
+    statusMessage.textContent = message;
+    statusMessage.className = `status-message ${type}`;
+}
+
 // Event Listeners
 historyBtn.addEventListener('click', openHistoryModal);
 closeHistoryBtn.addEventListener('click', () => historyModal.classList.add('hidden'));
 runBacktestBtn.addEventListener('click', runBacktest);
-stopBacktestBtn.addEventListener('click', stopBacktest);
 stopBacktestBtn.addEventListener('click', stopBacktest);
 clearSettingsBtn.addEventListener('click', clearSettings);
 loadSavedSettingsBtn.addEventListener('click', () => {
@@ -74,8 +110,12 @@ function initializeDateInputs() {
 document.addEventListener('DOMContentLoaded', async () => {
     initializeDateInputs();
     loadSettings();
-    // restoreCredentials(); // REMOVED: Server no longer stores credentials
-    await fetchConfig();
+
+    // Initialize from localStorage if available
+    const syncData = getSyncData();
+    if (syncData) {
+        autoLoadFromSync(syncData);
+    }
 
     // Attach timeframe listeners after DOM is ready
     attachTimeframeListeners();
@@ -87,10 +127,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Check for active job to restore
     checkActiveJob();
 
-    // Listen for sync data loaded from extension
-    window.addEventListener('tvBacktestSyncLoaded', (event) => {
-        console.log('🔄 Sync data loaded event received:', event.detail);
-        autoLoadFromSync(event.detail);
+    // Listen for sync data from content script (postMessage)
+    window.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'TV_BACKTEST_SYNC_DATA') {
+            console.log('🔄 Received sync data from content script:', event.data.data);
+            autoLoadFromSync(event.data.data);
+        }
     });
 });
 
@@ -107,16 +149,10 @@ function autoLoadFromSync(syncData) {
     const step1 = document.getElementById('step1');
     if (step1) step1.classList.remove('hidden');
 
-    // Update server state with session/signature
-    if (syncData.session) {
-        process.env = process.env || {};
-        console.log('✅ Session available from sync');
-    }
-
-    // If we have indicators, auto-load the first one
+    // If we have indicators, render them
     if (syncData.indicators && syncData.indicators.length > 0) {
-        const firstIndicator = syncData.indicators[0];
-        console.log('📊 Auto-loading indicator:', firstIndicator.name);
+        console.log(`📊 Found ${syncData.indicators.length} indicators`);
+        renderDiscoveredIndicators(syncData.indicators);
 
         // Store globally for access
         window.chartContext = {
@@ -126,54 +162,14 @@ function autoLoadFromSync(syncData) {
 
         // Show notification
         if (statusMessage) {
-            statusMessage.textContent = `🔄 Auto-loaded from extension: ${firstIndicator.name}`;
-            statusMessage.className = 'status-message success';
+            updateStatus(`🔄 Synced ${syncData.indicators.length} indicators from TradingView`, 'success');
             setTimeout(() => statusMessage.textContent = '', 5000);
         }
-
-        // Auto-load with TradingView values
-        setTimeout(() => {
-            loadIndicatorWithTVValues(firstIndicator);
-        }, 500);
-    }
-}
-
-// Restore TradingView credentials from localStorage
-async function restoreCredentials() {
-    // Check if we have sync data in localStorage
-    const syncDataStr = localStorage.getItem('tvBacktestSyncData');
-    if (!syncDataStr) {
-        console.log('⚠️ No credentials found in localStorage');
-        return;
-    }
-
-    try {
-        const syncData = JSON.parse(syncDataStr);
-        if (syncData.session) {
-            console.log('🔄 Restoring credentials to server...');
-            // Send credentials to server
-            const response = await fetch('/api/restore-credentials', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    session: syncData.session,
-                    signature: syncData.signature
-                })
-            });
-
-            if (response.ok) {
-                console.log('✅ Credentials restored from localStorage');
-            } else {
-                console.warn('⚠️ Failed to restore credentials');
-            }
-        }
-    } catch (e) {
-        console.error('Error restoring credentials:', e);
     }
 }
 
 async function checkActiveJob() {
-    const savedJobId = localStorage.getItem('currentJobId');
+    const savedJobId = getCurrentJobId();
     if (!savedJobId) return;
 
     try {
@@ -213,15 +209,10 @@ async function fetchHistory() {
     try {
         // Get session from localStorage to filter history
         const headers = {};
-        const syncDataStr = localStorage.getItem('tvBacktestSyncData');
-        if (syncDataStr) {
-            try {
-                const syncData = JSON.parse(syncDataStr);
-                if (syncData.session) {
-                    headers['x-session-id'] = syncData.session;
-                    console.log('✅ fetchHistory: Using session from localStorage');
-                }
-            } catch (e) { }
+        const syncData = getSyncData();
+        if (syncData && syncData.session) {
+            headers['x-session-id'] = syncData.session;
+            console.log('✅ fetchHistory: Using session from localStorage');
         }
 
         if (!headers['x-session-id']) {
@@ -311,35 +302,29 @@ function restoreJob(job) {
         if (cfg.dateTo) dateToInput.value = cfg.dateTo;
 
         // Restore Options & Ranges
-        // We need to fetch options first to render the UI, then apply values
         if (cfg.indicatorId) {
-            // We can't await here easily without making restoreJob async, 
-            // but fetchOptions is async.
-            // Let's try to fetch options and then apply values.
-            fetch(`/api/indicator?id=${encodeURIComponent(cfg.indicatorId)}`)
-                .then(res => res.json())
-                .then(data => {
-                    if (data.inputs) {
-                        // Render options with default values
-                        // But we want to override with saved values
+            // Try to find indicator in local sync data to get inputs
+            const syncData = getSyncData();
+            if (syncData) {
+                const indicator = syncData.indicators.find(ind => ind.id === cfg.indicatorId);
 
-                        // Temporarily set savedOptionsAndRanges so renderOptions uses them
-                        window.savedOptionsAndRanges = {
-                            indicatorId: cfg.indicatorId,
-                            options: cfg.options,
-                            ranges: cfg.ranges
-                        };
+                if (indicator && indicator.inputs) {
+                    // Temporarily set savedOptionsAndRanges so renderOptions uses them
+                    window.savedOptionsAndRanges = {
+                        indicatorId: cfg.indicatorId,
+                        options: cfg.options,
+                        ranges: cfg.ranges
+                    };
 
-                        renderOptions(data.inputs);
+                    renderOptions(indicator.inputs);
 
-                        // Update state explicitly just in case
-                        state.options = cfg.options || {};
-                        state.ranges = cfg.ranges || {};
+                    // Update state explicitly just in case
+                    state.options = cfg.options || {};
+                    state.ranges = cfg.ranges || {};
 
-                        updateBacktestSummary();
-                    }
-                })
-                .catch(e => console.error('Failed to restore options:', e));
+                    updateBacktestSummary();
+                }
+            }
         }
     }
 
@@ -349,14 +334,9 @@ function restoreJob(job) {
     // Show header buttons
     historyBtn.classList.remove('hidden');
     // Check if we have saved settings to show the button
-    const saved = localStorage.getItem('backtestSettings');
-    if (saved) {
-        try {
-            const settings = JSON.parse(saved);
-            if (settings.indicatorId === state.indicatorId) {
-                loadSavedSettingsBtn.classList.remove('hidden');
-            }
-        } catch (e) { }
+    const savedSettings = getSettings();
+    if (savedSettings && savedSettings.indicatorId === state.indicatorId) {
+        loadSavedSettingsBtn.classList.remove('hidden');
     }
 
     resultsTableBody.innerHTML = '';
@@ -405,20 +385,6 @@ function connectWebSocket(jobId) {
             statusMessage.textContent = `Progress: ${msg.current}/${msg.total} (${msg.percent}%)`;
             statusMessage.style.color = '';
         } else if (msg.type === 'result') {
-            // Avoid duplicates if we already loaded results
-            // But since we just loaded the full list from API, we might get duplicates if we are not careful.
-            // The server sends 'result' for each new result.
-            // If we loaded the job, we have the past results.
-            // We should check if result is already in state.results
-            // Ideally, the server only sends *new* results or we handle dedup.
-            // For simplicity, let's just append for now, or check index.
-
-            // Actually, if we subscribe, the server might replay results?
-            // In server.js: "Replay results if needed, or just let client know it's running"
-            // The current server implementation DOES NOT replay results on subscribe.
-            // It only sends status.
-            // So we are safe. New results will come in as they happen.
-
             state.results.push(msg.data);
             addResultRow(msg.data);
         } else if (msg.type === 'complete') {
@@ -440,6 +406,79 @@ function connectWebSocket(jobId) {
     };
 }
 
+// Helper: Generate range values (Client-side)
+function getRangeValues(min, max, step) {
+    const values = [];
+
+    // Validate inputs
+    min = parseFloat(min);
+    max = parseFloat(max);
+    step = parseFloat(step);
+
+    if (isNaN(min) || isNaN(max) || isNaN(step)) {
+        throw new Error('Invalid number in range definition (min, max, or step)');
+    }
+
+    if (step <= 0) {
+        console.warn(`Invalid step value: ${step}, using 1`);
+        step = 1;
+    }
+
+    // Calculate expected array size
+    const steps = Math.round((max - min) / step);
+    const expectedSize = steps + 1;
+
+    // Prevent creating arrays that are too large (max 1000 values per parameter)
+    if (expectedSize > 1000) {
+        throw new Error(`Range too large: ${expectedSize} values (max 1000). Adjust your min/max/step values.`);
+    }
+
+    for (let i = 0; i <= steps; i++) {
+        let val = min + (step * i);
+        // Fix floating point precision (e.g. 0.1 + 0.2 = 0.30000000000000004)
+        val = parseFloat(val.toPrecision(10));
+        values.push(val);
+    }
+
+    return values;
+}
+
+// Helper: Generate Cartesian product of options (Client-side)
+function generateOptionCombinations(baseOptions, ranges) {
+    const keys = Object.keys(baseOptions);
+    const combinations = [{}];
+
+    keys.forEach(key => {
+        let values = [baseOptions[key]];
+
+        // If this key has a range defined, use it
+        if (ranges && ranges[key] && ranges[key].active) {
+            if (typeof baseOptions[key] === 'boolean') {
+                values = [true, false];
+                console.log(`🔧 Range for ${key}: boolean (testing true/false)`);
+            } else {
+                const { min, max, step } = ranges[key];
+                console.log(`🔧 Range for ${key}: min=${min}, max=${max}, step=${step}`);
+                values = getRangeValues(min, max, step);
+                console.log(`  → Generated ${values.length} values: [${values.join(', ')}]`);
+            }
+        }
+
+        const newCombinations = [];
+        combinations.forEach(combo => {
+            values.forEach(val => {
+                newCombinations.push({ ...combo, [key]: val });
+            });
+        });
+
+        // Replace combinations with new expanded list
+        combinations.length = 0;
+        combinations.push(...newCombinations);
+    });
+
+    return combinations;
+}
+
 async function runBacktest() {
     if (!state.indicatorId) {
         alert('Please select an indicator first.');
@@ -456,25 +495,42 @@ async function runBacktest() {
         return;
     }
 
-    statusMessage.textContent = 'Starting backtest...';
-    statusMessage.className = 'status-message info';
+    updateStatus('Starting backtest...', 'info');
     runBacktestBtn.disabled = true;
     runBacktestBtn.textContent = 'Running Backtest...';
     stopBacktestBtn.classList.remove('hidden');
     resultsTableBody.innerHTML = '';
     state.results = []; // Clear previous results
+    step3.classList.remove('hidden'); // Show results section
 
     // Get credentials from localStorage
     let session = null;
     let signature = null;
-    const syncDataStr = localStorage.getItem('tvBacktestSyncData');
-    if (syncDataStr) {
-        try {
-            const syncData = JSON.parse(syncDataStr);
-            session = syncData.session;
-            signature = syncData.signature;
-        } catch (e) {
-            console.error('Error parsing syncData from localStorage:', e);
+    const syncData = getSyncData();
+    if (syncData) {
+        session = syncData.session;
+        signature = syncData.signature;
+    }
+
+    // Generate option combinations locally
+    let optionCombinations = [];
+    try {
+        optionCombinations = generateOptionCombinations(state.options, state.ranges);
+        console.log(`Generated ${optionCombinations.length} option combinations`);
+    } catch (e) {
+        alert('Error generating combinations: ' + e.message);
+        resetButtons();
+        return;
+    }
+
+    // Calculate total tests for confirmation
+    const totalTests = state.symbols.length * selectedTimeframes.length * optionCombinations.length;
+
+    // Warn if too many tests
+    if (totalTests > 100) {
+        if (!confirm(`This will run ${totalTests} backtests. Are you sure?`)) {
+            resetButtons();
+            return;
         }
     }
 
@@ -488,7 +544,9 @@ async function runBacktest() {
                 indicatorId: state.indicatorId,
                 symbols: state.symbols,
                 timeframes: selectedTimeframes,
-                options: state.options,
+                // Send pre-generated combinations instead of raw options/ranges
+                combinations: optionCombinations,
+                // Still send ranges for UI/logging purposes if needed, but logic is done
                 ranges: state.ranges,
                 dateFrom: dateFromInput.value,
                 dateTo: dateToInput.value,
@@ -507,128 +565,14 @@ async function runBacktest() {
         localStorage.setItem('currentJobId', job.id);
         connectWebSocket(job.id);
 
-        statusMessage.textContent = 'Backtest started. Waiting for results...';
-        statusMessage.className = 'status-message info';
+        updateStatus(`Backtest started (${totalTests} tests). Waiting for results...`, 'info');
 
         saveSettings(); // Save current settings after starting backtest
 
     } catch (error) {
         console.error('Backtest error:', error);
-        statusMessage.textContent = `❌ Error: ${error.message}`;
-        statusMessage.className = 'status-message error';
+        updateStatus(`❌ Error: ${error.message}`, 'error');
         resetButtons();
-    }
-}
-
-async function stopBacktest() {
-    if (!state.currentJobId) {
-        alert('No active backtest to stop.');
-        return;
-    }
-
-    statusMessage.textContent = 'Stopping backtest...';
-    statusMessage.className = 'status-message info';
-    stopBacktestBtn.disabled = true;
-
-    try {
-        const response = await fetch(`/api/jobs/${state.currentJobId}/stop`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.message || 'Failed to stop backtest');
-        }
-
-        statusMessage.textContent = 'Backtest stopped.';
-        statusMessage.className = 'status-message warning';
-        resetButtons();
-    } catch (error) {
-        console.error('Stop backtest error:', error);
-        statusMessage.textContent = `❌ Error stopping backtest: ${error.message}`;
-        statusMessage.className = 'status-message error';
-        resetButtons();
-    }
-}
-
-async function fetchOptions() {
-    if (!state.indicatorId) {
-        optionsContainer.innerHTML = '<p>Please select an indicator.</p>';
-        return;
-    }
-
-    optionsContainer.innerHTML = '<p>Loading options...</p>';
-    step2.classList.remove('hidden');
-    step3.classList.add('hidden'); // Hide step 3 until options are loaded
-
-    // Get credentials from localStorage
-    let session = null;
-    let signature = null;
-    const syncDataStr = localStorage.getItem('tvBacktestSyncData');
-    if (syncDataStr) {
-        try {
-            const syncData = JSON.parse(syncDataStr);
-            session = syncData.session;
-            signature = syncData.signature;
-        } catch (e) {
-            console.error('Error parsing syncData from localStorage:', e);
-        }
-    }
-
-    const headers = {
-        'Content-Type': 'application/json',
-    };
-    if (session) headers['x-session-id'] = session;
-    if (signature) headers['x-signature'] = signature;
-
-    try {
-        const res = await fetch(`/api/indicator?id=${encodeURIComponent(state.indicatorId)}`, { headers });
-        if (!res.ok) {
-            const errorData = await res.json();
-            throw new Error(errorData.message || 'Failed to fetch indicator options');
-        }
-        const data = await res.json();
-        renderOptions(data.inputs);
-        updateBacktestSummary();
-        saveSettings(); // Save settings after loading new indicator
-    } catch (e) {
-        console.error('Error fetching options:', e);
-        optionsContainer.innerHTML = `<p class="negative">Error loading options: ${e.message}</p>`;
-    }
-}
-
-async function fetchConfig() {
-    try {
-        const res = await fetch('/api/config');
-        const config = await res.json();
-
-        // Update UI
-        document.getElementById('appTitle').textContent = config.appTitle;
-        document.getElementById('appSubtitle').textContent = config.appSubtitle;
-
-        // Auto-load if indicator ID is set
-        if (config.indicatorId) {
-            state.indicatorId = config.indicatorId;
-            // Note: fetchOptions will be called when user clicks load button
-        }
-
-        // Store session if available - REMOVED: Server no longer returns session
-        // if (config.session) {
-        //     state.session = config.session;
-        //     console.log('✅ Session loaded from config');
-        // }
-
-        // Render Discovered Indicators
-        if (config.discoveredIndicators && config.discoveredIndicators.length > 0) {
-            // Store chart context globally
-            window.chartContext = config.chartContext || {};
-            renderDiscoveredIndicators(config.discoveredIndicators);
-        }
-    } catch (e) {
-        console.error('Failed to load config:', e);
     }
 }
 
@@ -664,7 +608,18 @@ function renderDiscoveredIndicators(indicators) {
 function loadIndicatorWithTVValues(indicator) {
     console.log('Loading with TradingView values:', indicator);
 
+    // RESET STATE when switching indicators
     state.indicatorId = indicator.id;
+    state.options = {};
+    state.ranges = {};
+    state.inputMetadata = {};
+    state.activeTab = 'Inputs';
+    state.currentIndicator = {
+        tabs: indicator.tabs || [],
+        groups: indicator.groups || [],
+        inputs: indicator.inputs || {}
+    };
+
     window.currentIndicatorObj = indicator; // Store for "Load Saved Settings" button
 
     // Show History Button
@@ -672,35 +627,20 @@ function loadIndicatorWithTVValues(indicator) {
 
     // Check if we should show "Load Saved Settings" button
     loadSavedSettingsBtn.classList.add('hidden');
-    const saved = localStorage.getItem('backtestSettings');
-    if (saved) {
-        try {
-            const settings = JSON.parse(saved);
-            if (settings.indicatorId === indicator.id) {
-                loadSavedSettingsBtn.classList.remove('hidden');
-            }
-        } catch (e) { }
+    const savedSettings = getSettings();
+    if (savedSettings && savedSettings.indicatorId === indicator.id) {
+        loadSavedSettingsBtn.classList.remove('hidden');
     }
 
-    // Convert TradingView inputs to options format
-    const tvOptions = {};
-    if (indicator.inputs && Array.isArray(indicator.inputs)) {
-        indicator.inputs.forEach(input => {
-            // Only include actual indicator inputs (in_0, in_1, etc.)
-            if (input.id && input.id.startsWith('in_')) {
-                tvOptions[input.id] = input.value;
-            }
-        });
-    }
-
-    // Store TradingView values in global variable so renderOptions can use them
+    // Note: No need to convert inputs format - they're already enriched objects from extension
+    // Just store empty ranges for TradingView values (no optimization by default)
     window.savedOptionsAndRanges = {
         indicatorId: indicator.id,
-        options: tvOptions,
+        options: {},  // Will be populated by renderOptions from indicator.inputs
         ranges: {} // No ranges from TradingView
     };
 
-    console.log('Prepared TradingView options:', tvOptions);
+    console.log('Loading indicator with', Object.keys(indicator.inputs || {}).length, 'inputs');
 
     // Load symbol from chartContext if available
     if (window.chartContext && window.chartContext.symbol) {
@@ -732,8 +672,7 @@ function loadIndicatorWithTVValues(indicator) {
 
     // Show status message
     if (statusMessage) {
-        statusMessage.textContent = `📊 Loading ${indicator.name} with TradingView values...`;
-        statusMessage.className = 'status-message success';
+        updateStatus(`📊 Loading ${indicator.name} with TradingView values...`, 'success');
         setTimeout(() => statusMessage.textContent = '', 3000);
     }
 
@@ -754,33 +693,22 @@ function loadIndicatorWithLocalValues(indicator) {
     loadSavedSettingsBtn.classList.remove('hidden');
 
     // Restore from localStorage
-    const saved = localStorage.getItem('backtestSettings');
-    if (saved) {
-        try {
-            const settings = JSON.parse(saved);
-            if (settings.indicatorId === indicator.id) {
-                window.savedOptionsAndRanges = {
-                    indicatorId: indicator.id,
-                    options: settings.options || {},
-                    ranges: settings.ranges || {}
-                };
-                console.log('Loaded localStorage values:', settings.options);
-            } else {
-                // Different indicator, clear saved values
-                window.savedOptionsAndRanges = null;
-            }
-        } catch (e) {
-            console.error('Error parsing localStorage:', e);
-            window.savedOptionsAndRanges = null;
-        }
+    const settings = getSettings();
+    if (settings && settings.indicatorId === indicator.id) {
+        window.savedOptionsAndRanges = {
+            indicatorId: indicator.id,
+            options: settings.options || {},
+            ranges: settings.ranges || {}
+        };
+        console.log('Loaded localStorage values:', settings.options);
     } else {
+        // Different indicator or no saved settings, clear saved values
         window.savedOptionsAndRanges = null;
     }
 
     // Show status message
     if (statusMessage) {
-        statusMessage.textContent = `💾 Loading ${indicator.name} with saved values...`;
-        statusMessage.className = 'status-message success';
+        updateStatus(`💾 Loading ${indicator.name} with saved values...`, 'success');
         setTimeout(() => statusMessage.textContent = '', 3000);
     }
 
@@ -803,7 +731,7 @@ function saveSettings() {
 }
 
 function loadSettings() {
-    const saved = localStorage.getItem('backtestSettings');
+    const settings = getSettings();
 
     // Default symbols if nothing saved
     const defaultSymbols = [
@@ -811,21 +739,16 @@ function loadSettings() {
         'BINANCE:BNBUSDT.P'
     ];
 
-    if (!saved) {
+    if (!settings) {
         state.symbols = defaultSymbols;
         renderSymbols();
         return;
     }
 
     try {
-        const settings = JSON.parse(saved);
-
         // Restore indicator ID
         if (settings.indicatorId) {
             state.indicatorId = settings.indicatorId;
-            state.indicatorName = settings.indicatorName || 'Saved Strategy';
-            state.activeSource = 'saved';
-
             state.activeSource = 'saved';
 
             // Note: We no longer render saved indicator in step1 as UI has changed
@@ -936,179 +859,279 @@ window.removeSymbol = (symbol) => {
 
 // --- OPTIONS FETCHING & RENDERING ---
 async function fetchOptions() {
-    const id = state.indicatorId;
-    if (!id) {
-        console.error('No indicator ID in state');
+    if (!state.indicatorId) {
+        optionsContainer.innerHTML = '<p>Please select an indicator.</p>';
         return;
     }
 
+    optionsContainer.innerHTML = '<p>Loading options...</p>';
+    step2.classList.remove('hidden');
+    step3.classList.add('hidden');
+
     try {
-        // Get credentials from localStorage
-        const syncDataStr = localStorage.getItem('tvBacktestSyncData');
-        if (!syncDataStr) {
-            throw new Error('No credentials found. Please use the Chrome Extension to sync your TradingView session.');
+        // Get indicator from sync data (localStorage)
+        const syncData = getSyncData();
+        if (!syncData) {
+            throw new Error('No sync data found. Please sync with extension.');
         }
 
-        const syncData = JSON.parse(syncDataStr);
-        if (!syncData.session || !syncData.signature) {
-            throw new Error('Incomplete credentials. Please re-sync using the Chrome Extension.');
+        const indicator = syncData.indicators.find(ind => ind.id === state.indicatorId);
+
+        if (!indicator) {
+            throw new Error('Indicator not found in sync data.');
         }
 
-        console.log('✅ Using credentials from localStorage');
+        if (!indicator.inputs || Object.keys(indicator.inputs).length === 0) {
+            throw new Error('Indicator has no inputs.');
+        }
 
-        const response = await fetch(`/api/indicator?id=${encodeURIComponent(id)}`, {
-            headers: {
-                'x-session-id': syncData.session,
-                'x-signature': syncData.signature
-            }
-        });
-        const data = await response.json();
+        // Store current indicator structure
+        state.currentIndicator = {
+            tabs: indicator.tabs || [{ name: 'Inputs', active: true }],
+            groups: indicator.groups || [],
+            inputs: indicator.inputs
+        };
 
-        if (data.error) throw new Error(data.error);
+        console.log('✅ Loaded indicator from localStorage:', indicator.name);
+        console.log('Tabs:', state.currentIndicator.tabs.length);
+        console.log('Groups:', state.currentIndicator.groups.length);
+        console.log('Inputs:', Object.keys(state.currentIndicator.inputs).length);
 
-        state.indicatorId = id;
-        renderOptions(data.inputs);
-        step2.classList.remove('hidden');
+        renderOptions(indicator);
+        updateBacktestSummary();
+        saveSettings();
 
-    } catch (error) {
-        alert('Error fetching options: ' + error.message);
-    } finally {
-        // fetchOptionsBtn.disabled = false;
-        // fetchOptionsBtn.textContent = 'Fetch Options';
+    } catch (e) {
+        console.error('Error fetching options:', e);
+        optionsContainer.innerHTML = `<p class="negative">Error loading options: ${e.message}</p>`;
     }
 }
 
-function renderOptions(inputs) {
+function renderOptions(indicator) {
     optionsContainer.innerHTML = '';
     state.options = {};
     state.ranges = {};
-    state.inputMetadata = {}; // Reset metadata
+    state.inputMetadata = {};
 
     const saved = window.savedOptionsAndRanges;
     const useSaved = saved && saved.indicatorId === state.indicatorId;
 
-    Object.keys(inputs).forEach(key => {
-        const inputObj = inputs[key];
+    // Create tabs navigation
+    const tabsNav = document.createElement('div');
+    tabsNav.className = 'indicator-tabs';
+    indicator.tabs.forEach(tab => {
+        const btn = document.createElement('button');
+        btn.className = `tab-button ${tab.active ? 'active' : ''}`;
+        btn.dataset.tab = tab.name;
+        btn.textContent = tab.name;
+        btn.onclick = () => switchTab(tab.name);
+        tabsNav.appendChild(btn);
+    });
+    optionsContainer.appendChild(tabsNav);
 
-        // Skip hidden inputs
-        if (inputObj.isHidden) return;
+    // Create tab content container
+    const tabContent = document.createElement('div');
+    tabContent.className = 'tab-content-container';
 
-        let value = inputObj.value;
-        const label = inputObj.name || key;
+    indicator.tabs.forEach(tab => {
+        const tabPane = document.createElement('div');
+        tabPane.className = `tab-pane ${tab.active ? 'active' : ''}`;
+        tabPane.dataset.tab = tab.name;
 
-        // Override with saved value if available
-        if (useSaved && saved.options && saved.options.hasOwnProperty(key)) {
-            value = saved.options[key];
-        }
+        const tabGroups = indicator.groups.filter(g => g.tab === tab.name);
 
-        state.options[key] = value; // Store value (default or saved)
-        state.inputMetadata[key] = label; // Store readable name
-
-        const row = document.createElement('div');
-        row.className = 'option-row';
-
-        const isNumber = typeof value === 'number';
-        const isBool = typeof value === 'boolean';
-
-        // --- INPUT CONTROL ---
-        let inputHtml = '';
-        if (isBool) {
-            inputHtml = `
-                <label class="toggle-switch">
-                    <input type="checkbox" 
-                           ${value ? 'checked' : ''} 
-                           onchange="updateOption('${key}', this.checked, 'boolean')">
-                    <span class="slider"></span>
-                </label>
-            `;
-        } else if (inputObj.options && Array.isArray(inputObj.options)) {
-            inputHtml = `
-                <select onchange="updateOption('${key}', this.value, 'text')">
-                    ${inputObj.options.map(opt => `<option value="${opt}" ${opt === value ? 'selected' : ''}>${opt}</option>`).join('')}
-                </select>
-            `;
+        if (tabGroups.length === 0) {
+            tabPane.innerHTML = '<p class="empty-tab">No settings available in this tab.</p>';
         } else {
-            inputHtml = `
-                <input type="${isNumber ? 'number' : 'text'}" 
-                       value="${value}" 
-                       onchange="updateOption('${key}', this.value, '${typeof value}')">
-            `;
+            tabGroups.forEach(group => {
+                const groupEl = renderGroup(group, indicator.inputs, useSaved, saved);
+                if (groupEl) tabPane.appendChild(groupEl);
+            });
         }
 
-        // --- OPTIMIZATION CONTROLS ---
-        let optimizeHtml = '';
-        if (isNumber || isBool) {
-            let isRangeActive = false;
-
-            // Helper to fix floating point issues (e.g. 0.1 + 0.2 = 0.30000000000000004)
-            const fix = (n) => parseFloat(n.toPrecision(10));
-
-            let rangeMin = isNumber ? value : null;
-            let rangeMax = isNumber ? fix(value + (value === 0 ? 10 : value * 2)) : null;
-            let rangeStep = isNumber ? fix(value === 0 ? 1 : value / 10) : null;
-
-            if (useSaved && saved.ranges && saved.ranges[key]) {
-                const r = saved.ranges[key];
-                isRangeActive = r.active;
-                if (isNumber) {
-                    rangeMin = r.min;
-                    rangeMax = r.max;
-                    rangeStep = r.step;
-                }
-
-                if (isRangeActive) {
-                    state.ranges[key] = { active: true, min: rangeMin, max: rangeMax, step: rangeStep };
-                }
-            }
-
-            const optimizeContent = isNumber ? `
-                <div class="optimize-input-group">
-                    <label>Min</label>
-                    <input type="number" value="${rangeMin}" onchange="updateRange('${key}', 'min', this.value)">
-                </div>
-                <div class="optimize-input-group">
-                    <label>Max</label>
-                    <input type="number" value="${rangeMax}" onchange="updateRange('${key}', 'max', this.value)">
-                </div>
-                <div class="optimize-input-group">
-                    <label>Step</label>
-                    <input type="number" value="${rangeStep}" onchange="updateRange('${key}', 'step', this.value)">
-                </div>
-            ` : `
-                <span class="test-both-badge">Test True/False</span>
-            `;
-
-            optimizeHtml = `
-                <div class="optimize-wrapper">
-                    <label class="optimize-check-wrapper">
-                        <input type="checkbox" id="opt_${key}" 
-                               onchange="toggleRange('${key}', this.checked)" 
-                               ${isRangeActive ? 'checked' : ''}>
-                        Optimize
-                    </label>
-                    <div id="opt_settings_${key}" class="optimize-settings ${isRangeActive ? '' : 'hidden'}">
-                        ${optimizeContent}
-                    </div>
-                </div>
-            `;
-        }
-
-        row.innerHTML = `
-            <div class="option-label" title="${key}">${label}</div>
-            <div class="option-controls">
-                <div class="control-primary">
-                    ${inputHtml}
-                </div>
-                ${optimizeHtml}
-            </div>
-        `;
-
-        optionsContainer.appendChild(row);
+        tabContent.appendChild(tabPane);
     });
 
-    // Update backtest summary after rendering options
+    optionsContainer.appendChild(tabContent);
     setTimeout(() => updateBacktestSummary(), 100);
 }
+
+function renderGroup(group, allInputs, useSaved, saved) {
+    // Check if group has visible inputs
+    const visibleInputs = group.inputs.filter(inputId => {
+        const inputObj = allInputs[inputId];
+        return inputObj && !inputObj.isHidden;
+    });
+
+    if (visibleInputs.length === 0) return null;
+
+    const groupEl = document.createElement('div');
+    groupEl.className = 'input-group collapsible';
+
+    const header = document.createElement('div');
+    header.className = 'group-header';
+    header.innerHTML = `
+        <span class="group-name">${group.name}</span>
+        <span class="collapse-icon">▼</span>
+    `;
+    header.onclick = () => toggleGroup(group.id);
+    groupEl.appendChild(header);
+
+    const content = document.createElement('div');
+    content.className = 'group-content';
+    content.id = `group_${group.id}`;
+
+    visibleInputs.forEach(inputId => {
+        const inputObj = allInputs[inputId];
+        const row = renderInputRow(inputId, inputObj, useSaved, saved);
+        content.appendChild(row);
+    });
+
+    groupEl.appendChild(content);
+    return groupEl;
+}
+
+function renderInputRow(key, inputObj, useSaved, saved) {
+    let value = inputObj.value;  // Use TV value
+    const label = inputObj.name || key;
+
+    if (useSaved && saved.options && saved.options.hasOwnProperty(key)) {
+        value = saved.options[key];
+    }
+
+    state.options[key] = value;
+    state.inputMetadata[key] = label;
+
+    const row = document.createElement('div');
+    row.className = 'option-row';
+
+    const isNumber = inputObj.type === 'float' || inputObj.type === 'integer';
+    const isBool = inputObj.type === 'bool';
+
+    let inputHtml = '';
+    if (isBool) {
+        inputHtml = `
+            <label class="toggle-switch">
+                <input type="checkbox" ${value ? 'checked' : ''}
+                       onchange="updateOption('${key}', this.checked, 'boolean')">
+                <span class="slider"></span>
+            </label>
+        `;
+    } else if (inputObj.options && Array.isArray(inputObj.options)) {
+        inputHtml = `
+            <select onchange="updateOption('${key}', this.value, 'text')">
+                ${inputObj.options.map(opt =>
+                    `<option value="${opt}" ${opt === value ? 'selected' : ''}>${opt}</option>`
+                ).join('')}
+            </select>
+        `;
+    } else {
+        inputHtml = `
+            <input type="${isNumber ? 'number' : 'text'}"
+                   value="${value}"
+                   ${inputObj.step ? `step="${inputObj.step}"` : ''}
+                   ${inputObj.min !== undefined ? `min="${inputObj.min}"` : ''}
+                   ${inputObj.max !== undefined ? `max="${inputObj.max}"` : ''}
+                   onchange="updateOption('${key}', this.value, '${inputObj.type}')">
+        `;
+    }
+
+    // Optimization controls
+    let optimizeHtml = '';
+    if (isNumber || isBool) {
+        let isRangeActive = false;
+        const fix = (n) => parseFloat(n.toPrecision(10));
+
+        let rangeMin = isNumber ? value : null;
+        let rangeMax = isNumber ? fix(value + (value === 0 ? 10 : value * 2)) : null;
+        let rangeStep = isNumber ? (inputObj.step || fix(value === 0 ? 1 : value / 10)) : null;
+
+        if (useSaved && saved.ranges && saved.ranges[key]) {
+            const r = saved.ranges[key];
+            isRangeActive = r.active;
+            if (isNumber) {
+                rangeMin = r.min;
+                rangeMax = r.max;
+                rangeStep = r.step;
+            }
+
+            if (isRangeActive) {
+                state.ranges[key] = { active: true, min: rangeMin, max: rangeMax, step: rangeStep };
+            }
+        }
+
+        const optimizeContent = isNumber ? `
+            <div class="optimize-input-group">
+                <label>Min</label>
+                <input type="number" value="${rangeMin}" onchange="updateRange('${key}', 'min', this.value)">
+            </div>
+            <div class="optimize-input-group">
+                <label>Max</label>
+                <input type="number" value="${rangeMax}" onchange="updateRange('${key}', 'max', this.value)">
+            </div>
+            <div class="optimize-input-group">
+                <label>Step</label>
+                <input type="number" value="${rangeStep}" step="${inputObj.step || 'any'}" onchange="updateRange('${key}', 'step', this.value)">
+            </div>
+        ` : `
+            <span class="test-both-badge">Test True/False</span>
+        `;
+
+        optimizeHtml = `
+            <div class="optimize-wrapper">
+                <label class="optimize-check-wrapper">
+                    <input type="checkbox" id="opt_${key}"
+                           onchange="toggleRange('${key}', this.checked)"
+                           ${isRangeActive ? 'checked' : ''}>
+                    Optimize
+                </label>
+                <div id="opt_settings_${key}" class="optimize-settings ${isRangeActive ? '' : 'hidden'}">
+                    ${optimizeContent}
+                </div>
+            </div>
+        `;
+    }
+
+    const tooltipAttr = inputObj.tooltip ? `title="${inputObj.tooltip}"` : '';
+
+    row.innerHTML = `
+        <div class="option-label" ${tooltipAttr}>${label}</div>
+        <div class="option-controls">
+            <div class="control-primary">${inputHtml}</div>
+            ${optimizeHtml}
+        </div>
+    `;
+
+    return row;
+}
+
+// Tab and group control functions
+window.switchTab = function(tabName) {
+    state.activeTab = tabName;
+
+    document.querySelectorAll('.tab-button').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tabName);
+    });
+
+    document.querySelectorAll('.tab-pane').forEach(pane => {
+        pane.classList.toggle('active', pane.dataset.tab === tabName);
+    });
+};
+
+window.toggleGroup = function(groupId) {
+    const content = document.getElementById(`group_${groupId}`);
+    if (!content) return;
+
+    const icon = content.parentElement.querySelector('.collapse-icon');
+
+    if (content.classList.contains('collapsed')) {
+        content.classList.remove('collapsed');
+        icon.textContent = '▼';
+    } else {
+        content.classList.add('collapsed');
+        icon.textContent = '▶';
+    }
+};
 
 window.updateOption = (key, value, type) => {
     if (type === 'number') {
@@ -1257,127 +1280,6 @@ function updateBacktestSummary() {
             totalElement.style.webkitBackgroundClip = 'text';
             totalElement.style.backgroundClip = 'text';
         }
-    }
-}
-
-async function runBacktest() {
-    const timeframes = Array.from(document.querySelectorAll('input[name="timeframe"]:checked'))
-        .map(cb => cb.value);
-
-    if (state.symbols.length === 0 || timeframes.length === 0) {
-        return alert('Please enter at least one symbol and select at least one timeframe');
-    }
-
-    // Calculate total number of option combinations
-    let totalCombinations = 1;
-    const rangeDetails = [];
-
-    Object.keys(state.ranges).forEach(key => {
-        if (state.ranges[key].active) {
-            const r = state.ranges[key];
-            if (typeof state.options[key] === 'boolean') {
-                totalCombinations *= 2;
-                rangeDetails.push(`${state.inputMetadata[key] || key}: 2 values (true/false)`);
-            } else {
-                const steps = Math.round((r.max - r.min) / r.step);
-                const count = steps + 1;
-                totalCombinations *= count;
-                rangeDetails.push(`${state.inputMetadata[key] || key}: ${count} values (${r.min} to ${r.max} by ${r.step})`);
-            }
-        }
-    });
-
-    const totalBacktests = state.symbols.length * timeframes.length * totalCombinations;
-
-    // Show confirmation if running many backtests
-    if (totalBacktests > 50) {
-        const details = rangeDetails.length > 0 ? '\n\nRange details:\n' + rangeDetails.join('\n') : '';
-        const message = `You are about to run ${totalBacktests} backtests:\n• ${state.symbols.length} symbols\n• ${timeframes.length} timeframes\n• ${totalCombinations} option combinations${details}\n\nThis may take several minutes. Continue?`;
-
-        if (!confirm(message)) {
-            return;
-        }
-    }
-
-
-    runBacktestBtn.disabled = true;
-    runBacktestBtn.textContent = 'Running Backtest...';
-    stopBacktestBtn.classList.remove('hidden'); // Show stop button
-    statusMessage.textContent = 'Starting backtest...';
-    step3.classList.remove('hidden');
-    resultsTableBody.innerHTML = '';
-    state.results = [];
-
-    // Save settings to localStorage
-    saveSettings();
-
-    try {
-        // Get credentials from localStorage
-        const syncDataStr = localStorage.getItem('tvBacktestSyncData');
-        if (!syncDataStr) {
-            throw new Error('No credentials found. Please sync via the Chrome Extension.');
-        }
-
-        const syncData = JSON.parse(syncDataStr);
-        if (!syncData.session || !syncData.signature) {
-            throw new Error('Missing credentials. Please sync via the Chrome Extension.');
-        }
-
-        const payload = {
-            indicatorId: state.indicatorId,
-            options: state.options,
-            ranges: state.ranges,
-            symbols: state.symbols,
-            timeframes,
-            inputMetadata: state.inputMetadata, // Send readable names to backend
-            dateFrom: dateFromInput.value,
-            dateTo: dateToInput.value,
-            session: syncData.session,
-            signature: syncData.signature
-        };
-
-        // Debug: Log the ranges being sent
-        console.log('📤 Sending ranges to backend:');
-        Object.keys(state.ranges).forEach(key => {
-            if (state.ranges[key].active) {
-                const r = state.ranges[key];
-                console.log(`  ${key}: min=${r.min}, max=${r.max}, step=${r.step}`);
-            }
-        });
-
-
-        // Start job via HTTP
-        const response = await fetch('/api/backtest', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        const data = await response.json();
-        if (data.error) throw new Error(data.error);
-
-        const jobId = data.jobId;
-        state.currentJobId = jobId; // Store for stop functionality
-        localStorage.setItem('currentJobId', jobId); // Persist for auto-resume
-        console.log('Job started:', jobId);
-
-        // Connect to WebSocket
-        connectWebSocket(jobId);
-
-
-
-    } catch (error) {
-        const errorMsg = error.message || 'Unknown error';
-        statusMessage.textContent = '❌ Error: ' + errorMsg;
-        statusMessage.style.color = '#ff4444';
-        statusMessage.className = 'status-message error';
-
-        // Show alert for credential errors
-        if (errorMsg.includes('credentials') || errorMsg.includes('Chrome Extension')) {
-            alert('⚠️ ' + errorMsg + '\n\nPlease sync again using the Chrome Extension.');
-        }
-
-        resetButtons();
     }
 }
 
