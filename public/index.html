@@ -23,8 +23,6 @@
             <h1 id="appTitle">TradingView Backtester</h1>
             <p id="appSubtitle">Automated strategy testing with range analysis</p>
             <div class="header-actions">
-                <button id="loadSavedSettingsBtn" class="btn secondary hidden"
-                    title="Load saved settings for this indicator">💾 Load Saved Settings</button>
                 <button id="historyBtn" class="btn secondary history-btn hidden">📜 History</button>
             </div>
         </header>
@@ -39,7 +37,11 @@
 
             <!-- Step 2: Configuration -->
             <section class="card hidden" id="step2">
-                <h2>Configure Strategy</h2>
+                <div class="section-header">
+                    <h2>Configure Strategy</h2>
+                    <button id="loadSavedSettingsBtn" class="btn secondary hidden"
+                        title="Load saved settings for this indicator">💾 Load Saved Settings</button>
+                </div>
 
                 <!-- Symbols Section -->
                 <div class="input-group">
@@ -100,7 +102,6 @@
                             <input type="date" id="dateTo" class="date-input">
                         </div>
                     </div>
-                    <div class="date-hint">💡 Premium accounts can access up to 3 years of historical data</div>
                 </div>
 
                 <hr class="divider">
@@ -227,8 +228,6 @@
                                     <th>Profit</th>
                                     <th>Profit %</th>
                                     <th>Cumulative</th>
-                                    <th>DD</th>
-                                    <th>DD %</th>
                                 </tr>
                             </thead>
                             <tbody id="tradesTableBody"></tbody>

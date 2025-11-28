@@ -503,6 +503,11 @@ async function runBacktest() {
     state.results = []; // Clear previous results
     step3.classList.remove('hidden'); // Show results section
 
+    // Scroll to results section
+    setTimeout(() => {
+        step3.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+
     // Get credentials from localStorage
     let session = null;
     let signature = null;
@@ -579,7 +584,7 @@ async function runBacktest() {
 function renderDiscoveredIndicators(indicators) {
     if (!discoveredContainer) return;
 
-    discoveredContainer.innerHTML = '<h3>Active Strategies (from Extension)</h3>';
+    discoveredContainer.innerHTML = '<br/>';
 
     const list = document.createElement('div');
     list.className = 'discovered-list';
@@ -899,7 +904,6 @@ async function fetchOptions() {
 
         renderOptions(indicator);
         updateBacktestSummary();
-        saveSettings();
 
     } catch (e) {
         console.error('Error fetching options:', e);
@@ -999,7 +1003,8 @@ function renderInputRow(key, inputObj, useSaved, saved) {
         value = saved.options[key];
     }
 
-    state.options[key] = value;
+    const isNumeric = inputObj.type === 'float' || inputObj.type === 'integer';
+    state.options[key] = isNumeric ? parseFloat(value) : value;
     state.inputMetadata[key] = label;
 
     const row = document.createElement('div');
@@ -1060,18 +1065,31 @@ function renderInputRow(key, inputObj, useSaved, saved) {
             }
         }
 
+        // Toujours initialiser state.ranges pour les paramètres numériques et booléens
+        // Cela garantit que les ranges sont sauvegardées même si non optimisées
+        if (!state.ranges[key]) {
+            state.ranges[key] = {
+                active: isRangeActive,  // false par défaut pour nouveaux indicateurs
+                min: rangeMin,
+                max: rangeMax,
+                step: rangeStep
+            };
+        }
+
         const optimizeContent = isNumber ? `
-            <div class="optimize-input-group">
-                <label>Min</label>
-                <input type="number" value="${rangeMin}" onchange="updateRange('${key}', 'min', this.value)">
-            </div>
-            <div class="optimize-input-group">
-                <label>Max</label>
-                <input type="number" value="${rangeMax}" onchange="updateRange('${key}', 'max', this.value)">
-            </div>
-            <div class="optimize-input-group">
-                <label>Step</label>
-                <input type="number" value="${rangeStep}" step="${inputObj.step || 'any'}" onchange="updateRange('${key}', 'step', this.value)">
+            <div class="optimize-fields-container">
+                <div class="optimize-input-group">
+                    <label>Min</label>
+                    <input type="number" value="${rangeMin}" onchange="updateRange('${key}', 'min', this.value)">
+                </div>
+                <div class="optimize-input-group">
+                    <label>Max</label>
+                    <input type="number" value="${rangeMax}" onchange="updateRange('${key}', 'max', this.value)">
+                </div>
+                <div class="optimize-input-group">
+                    <label>Step</label>
+                    <input type="number" value="${rangeStep}" step="${inputObj.step || 'any'}" onchange="updateRange('${key}', 'step', this.value)">
+                </div>
             </div>
         ` : `
             <span class="test-both-badge">Test True/False</span>
@@ -1134,7 +1152,7 @@ window.toggleGroup = function(groupId) {
 };
 
 window.updateOption = (key, value, type) => {
-    if (type === 'number') {
+    if (type === 'number' || type === 'float' || type === 'integer') {
         state.options[key] = parseFloat(value);
     } else {
         state.options[key] = value;
@@ -1343,6 +1361,7 @@ function addResultRow(r) {
     row.addEventListener('click', () => openAnalyticsModal(r));
 
     if (r.error || !r.report) {
+        row.classList.add('result-row-error');
         row.innerHTML = `
             <td>${r.symbol}</td>
             <td>${r.timeframe}</td>
@@ -1352,6 +1371,11 @@ function addResultRow(r) {
     } else {
         const netProfit = r.report.netProfit !== 'N/A' ? r.report.netProfit : null;
         const netProfitClass = netProfit !== null && netProfit >= 0 ? 'positive' : 'negative';
+
+        // Add border class based on profit
+        if (netProfit !== null) {
+            row.classList.add(netProfit >= 0 ? 'result-row-profit' : 'result-row-loss');
+        }
 
         // Calculate number of days and profit per day
         let nbDays = 'N/A';
@@ -1408,11 +1432,12 @@ let sortState = { column: null, direction: 'asc' };
 
 function initTableSorting() {
     const headers = document.querySelectorAll('#resultsTable th');
-    const sortableColumns = [3, 4, 5, 6, 7, 8, 9, 10]; // Net Profit, Trades, % Win, PF, DD, Avg Trade, Nb Days, Profit per days
+    const sortableColumns = [3, 4, 5, 6, 7, 8]; // Net Profit, Trades, % Win, PF, DD, Avg Trade
 
     headers.forEach((header, index) => {
         if (sortableColumns.includes(index)) {
             header.classList.add('sortable');
+            header.style.cursor = 'pointer';
             header.addEventListener('click', () => sortTable(index));
         }
     });
@@ -1539,21 +1564,24 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 });
 
-// Tab switching
+// Tab switching (only for modal tabs, not indicator tabs)
 document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const tabName = btn.dataset.tab;
+    const modal = document.getElementById('analyticsModal');
+    if (modal) {
+        modal.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tabName = btn.dataset.tab;
 
-            // Update active button
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
+                // Update active button (only within modal)
+                modal.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
 
-            // Update active pane
-            document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
-            document.getElementById(`${tabName}-tab`).classList.add('active');
+                // Update active pane (only within modal)
+                modal.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
+                document.getElementById(`${tabName}-tab`).classList.add('active');
+            });
         });
-    });
+    }
 });
 
 function renderEquityChart(report) {
@@ -1750,7 +1778,7 @@ function renderTradesTab(report) {
     const tbody = document.getElementById('tradesTableBody');
 
     if (!report.trades || report.trades.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="11">No trades available</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9">No trades available</td></tr>';
         return;
     }
 
@@ -1771,12 +1799,14 @@ function renderTradesTab(report) {
 
     tbody.innerHTML = trades.map((trade, index) => {
         const profitClass = trade.profit?.v >= 0 ? 'positive' : 'negative';
+        const borderClass = trade.profit?.v >= 0 ? 'result-row-profit' : 'result-row-loss';
         const type = trade.entry?.type || 'N/A';
+        const typeClass = type.toLowerCase() === 'long' ? 'trade-type-long' : type.toLowerCase() === 'short' ? 'trade-type-short' : '';
 
         return `
-            <tr>
+            <tr class="${borderClass}">
                 <td>${trades.length - index}</td>
-                <td>${type.toUpperCase()}</td>
+                <td><span class="${typeClass}">${type.toUpperCase()}</span></td>
                 <td><small>${formatDateTime(trade.entry?.time)}</small></td>
                 <td>${trade.entry?.value?.toFixed(5) || 'N/A'}</td>
                 <td><small>${formatDateTime(trade.exit?.time)}</small></td>
@@ -1784,8 +1814,6 @@ function renderTradesTab(report) {
                 <td class="${profitClass}">${trade.profit?.v?.toFixed(2) || 'N/A'}</td>
                 <td class="${profitClass}">${trade.profit?.p ? (trade.profit.p * 100).toFixed(2) + '%' : 'N/A'}</td>
                 <td>${trade.cumulative?.v?.toFixed(2) || 'N/A'}</td>
-                <td class="negative">${trade.drawdown?.v?.toFixed(2) || 'N/A'}</td>
-                <td class="negative">${trade.drawdown?.p ? (trade.drawdown.p * 100).toFixed(2) + '%' : 'N/A'}</td>
             </tr>
         `;
     }).join('');
