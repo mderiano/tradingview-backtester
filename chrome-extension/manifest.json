@@ -1,6 +1,6 @@
 {
     "manifest_version": 3,
-    "name": "TradingView Backtest Helper",
+    "name": "TradingView Backtest",
     "version": "1.0.3",
     "description": "Extracts TradingView session and active indicators for local backtesting.",
     "permissions": [
@@ -11,12 +11,12 @@
     ],
     "host_permissions": [
         "https://*.tradingview.com/*",
-        "http://freebox.deriano.fr:3000/*"
+        "http://srv1159534.hstgr.cloud:3000/*"
     ],
     "content_scripts": [
         {
             "matches": [
-                "http://freebox.deriano.fr:3000/*",
+                "http://srv1159534.hstgr.cloud:3000/*",
                 "http://localhost:*/*"
             ],
             "js": [

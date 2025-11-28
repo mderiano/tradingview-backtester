@@ -6,7 +6,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'syncToServer') {
         console.log('📤 Background: Received sync request', request.payload);
         
-        const serverUrl = request.serverUrl || 'http://freebox.deriano.fr:3000';
+        const serverUrl = request.serverUrl || 'http://srv1159534.hstgr.cloud:3000';
         const apiUrl = `${serverUrl}/api/sync`;
         
         console.log('📤 Background: Sending to', apiUrl);

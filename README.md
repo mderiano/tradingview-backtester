@@ -2,45 +2,59 @@
 
 Système automatisé pour tester des stratégies Pine Script et récupérer les résultats de backtest.
 
+## 📦 Prérequis
+
+Avant d'installer ce projet, assurez-vous d'avoir Node.js et npm installés.
+
+### Installation de Node.js et npm
+
+**Sur Ubuntu/Debian:**
+```bash
+# Installer Node.js 20.x (version LTS recommandée)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# Vérifier l'installation
+node --version  # Devrait afficher v20.x.x
+npm --version   # Devrait afficher 10.x.x
+```
+
+**Sur macOS:**
+```bash
+# Avec Homebrew
+brew install node
+
+# Vérifier l'installation
+node --version
+npm --version
+```
+
+**Sur Windows:**
+- Télécharger l'installeur depuis [nodejs.org](https://nodejs.org/)
+- Exécuter l'installeur et suivre les instructions
+- Redémarrer le terminal après installation
+- Vérifier avec `node --version` et `npm --version`
+
 ## 🚀 Installation
 
 ```bash
 npm install
 ```
 
-## 🔑 Configuration
+## ⚙️ Configuration (Optionnelle)
 
-1. Connectez-vous à TradingView dans votre navigateur
-2. Ouvrez les Developer Tools (F12)
-3. Allez dans **Application** > **Cookies** > **https://www.tradingview.com**
-4. Copiez les valeurs de `sessionid` et `signature`
-5. Créez un fichier `.env` :
+Le serveur fonctionne avec les valeurs par défaut. La configuration n'est nécessaire que si vous souhaitez personnaliser:
 
-```bash
-cp .env.example .env
-```
+**Variables disponibles:**
+- `PORT` - Port du serveur (défaut: 3000)
+- `RETENTION_DAYS` - Durée de conservation des résultats en jours (défaut: 15)
+- `BACKTEST_TIMEOUT_MS` - Timeout des backtests en millisecondes (défaut: 120000)
 
-6. Éditez `.env` et collez vos credentials :
+**Pour personnaliser:**
+1. Copiez le fichier d'exemple: `cp .env.example .env`
+2. Éditez `.env` et décommentez/modifiez les valeurs souhaitées
 
-```
-SESSION=votre_sessionid
-SIGNATURE=votre_signature
-```
-
-### 🔍 Récupérer l'INDICATOR_ID
-
-L'INDICATOR_ID est l'identifiant unique (Pine ID) de votre indicateur ou stratégie TradingView.  
-Le format est généralement : `PUB;[chaîne_alphanumérique]`  
-**Exemple :** `PUB;a220effaf2a2472aa8f95c1c1fb1b5c1`
-
-**Comment le trouver :**
-1. Ouvrez TradingView et cliquez sur le bouton **"Indicators"**
-2. La liste de tous les indicateurs disponibles s'affiche
-3. Ouvrez les **Developer Tools** de votre navigateur (F12)
-4. Activez l'**Inspecteur d'éléments** (icône de curseur en haut à gauche des DevTools)
-5. Cliquez sur le **nom de l'indicateur** que vous voulez utiliser dans la liste
-6. Dans le code HTML affiché, cherchez l'attribut contenant l'ID (généralement `data-id`, `data-script-id` ou similaire)
-7. Vous trouverez l'ID au format `PUB;xxxxx...`
+**Note:** Les credentials TradingView (session/signature) sont maintenant fournis directement via l'extension Chrome et ne sont plus stockés dans le fichier .env.
 
 ## 🚀 Lancer le serveur
 
@@ -82,24 +96,48 @@ pm2 save                    # Sauvegarder la liste des processus
 
 ## 📊 Utilisation
 
-1. **Ouvrez votre navigateur** et accédez à `http://localhost:3000`
+**Important:** Ce système nécessite l'extension Chrome pour fonctionner. L'extension fournit automatiquement les credentials TradingView nécessaires.
 
-2. **Sélectionnez un indicateur** :
+### Installation de l'extension Chrome
+
+1. **Installez l'extension** :
+   - Ouvrez Chrome et accédez à `chrome://extensions/`
+   - Activez le "Mode développeur" (coin supérieur droit)
+   - Cliquez sur "Charger l'extension non empaquetée"
+   - Sélectionnez le dossier de l'extension (fichier `chrome-extension.zip` à décompresser)
+
+2. **Connectez-vous à TradingView** :
+   - Ouvrez [TradingView](https://www.tradingview.com) dans Chrome
+   - Connectez-vous à votre compte TradingView
+   - L'extension détectera automatiquement vos credentials
+
+### Utilisation du backtester
+
+1. **Lancez le serveur** (si ce n'est pas déjà fait) :
+   ```bash
+   npm start
+   ```
+
+2. **Ouvrez l'interface** via l'extension Chrome :
+   - Cliquez sur l'icône de l'extension dans Chrome
+   - Ou accédez directement à `http://localhost:3000` (ou le port configuré)
+
+3. **Sélectionnez un indicateur** :
    - Entrez l'ID de l'indicateur (public ou privé)
    - Cliquez sur "Fetch Options" pour charger les paramètres
 
-3. **Configurez votre backtest** :
+4. **Configurez votre backtest** :
    - **Symboles** : Ajoutez les symboles à tester (ex: BINANCE:BTCUSDT, NASDAQ:AAPL)
    - **Timeframes** : Sélectionnez les périodes (1m, 5m, 15m, 4h, 1D, 1W, etc.)
    - **Options** : Configurez les paramètres de l'indicateur
    - **Ranges** : Définissez des plages pour tester plusieurs valeurs d'un paramètre
 
-4. **Exécutez le backtest** :
+5. **Exécutez le backtest** :
    - Cliquez sur "Run Backtest"
    - Suivez la progression en temps réel
    - Les résultats s'afficheront au fur et à mesure
 
-5. **Analysez les résultats** :
+6. **Analysez les résultats** :
    - Cliquez sur une ligne du tableau pour voir les analytics détaillées
    - Consultez la courbe d'équité, les métriques de performance et la liste des trades
    - Exportez les résultats en Excel si nécessaire

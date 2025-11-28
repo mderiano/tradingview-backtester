@@ -41,7 +41,7 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                 args: [sessionValue, signatureValue], // Pass as arguments
                 func: (session, signature) => {
                     try {
-                        console.log("🔍 TV Backtest Helper: Starting extraction (Main World)...");
+                        console.log("🔍 TV Backtest: Starting extraction (Main World)...");
 
                         // Helper to explore and find the chart widget
                         function getChartWidget() {
@@ -117,12 +117,12 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
 
                         const chartWidget = getChartWidget();
                         if (!chartWidget) {
-                            console.error("❌ TV Backtest Helper: No active chart widget found.");
+                            console.error("❌ TV Backtest: No active chart widget found.");
                             console.log("Debug: Available window keys:", Object.keys(window).filter(k => k.toLowerCase().includes('tv') || k.toLowerCase().includes('chart')));
                             return { error: "No active chart found. Check console for available objects." };
                         }
 
-                        console.log("✅ TV Backtest Helper: Found chart widget:", chartWidget);
+                        console.log("✅ TV Backtest: Found chart widget:", chartWidget);
                         console.log("Debug: Widget methods:", Object.getOwnPropertyNames(Object.getPrototypeOf(chartWidget)));
 
                         // Extract chart parameters
@@ -463,7 +463,7 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                             }
                         });
 
-                        console.log("✅ TV Backtest Helper: Extracted indicators:", found);
+                        console.log("✅ TV Backtest: Extracted indicators:", found);
 
                         return {
                             session: session,
@@ -474,7 +474,7 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                             // Note: grouping is now per-indicator (in indicators[].tabs and indicators[].groups)
                         };
                     } catch (e) {
-                        console.error("❌ TV Backtest Helper: Error", e);
+                        console.error("❌ TV Backtest: Error", e);
                         return { error: e.message, stack: e.stack };
                     }
                 }
@@ -505,7 +505,7 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
             console.log('💾 Saving sync data to local storage:', syncData);
 
             // Get server URL from config
-            const serverUrl = window.BACKTEST_CONFIG?.SERVER_URL || 'http://freebox.deriano.fr:3000';
+            const serverUrl = window.BACKTEST_CONFIG?.SERVER_URL || 'http://srv1159534.hstgr.cloud:3000';
 
             // Save to chrome.storage.local
             chrome.storage.local.set({
