@@ -31,7 +31,7 @@ const resultsTableBody = document.querySelector('#resultsTable tbody');
 
 const statusMessage = document.getElementById('statusMessage');
 const clearSettingsBtn = document.getElementById('clearSettingsBtn');
-const loadSavedSettingsBtn = document.getElementById('loadSavedSettingsBtn');
+const reloadPreviousSettingsBtn = document.getElementById('reloadPreviousSettingsBtn');
 
 // History Elements
 const historyBtn = document.getElementById('historyBtn');
@@ -158,7 +158,7 @@ closeHistoryBtn.addEventListener('click', () => historyModal.classList.add('hidd
 runBacktestBtn.addEventListener('click', runBacktest);
 stopBacktestBtn.addEventListener('click', stopBacktest);
 clearSettingsBtn.addEventListener('click', clearSettings);
-loadSavedSettingsBtn.addEventListener('click', () => {
+reloadPreviousSettingsBtn.addEventListener('click', () => {
     if (state.indicatorId && window.currentIndicatorObj) {
         loadIndicatorWithLocalValues(window.currentIndicatorObj);
     }
@@ -261,7 +261,21 @@ function autoLoadFromSync(syncData) {
             timeframe: syncData.timeframe || ''
         };
 
-        // Show notification
+        // Auto-load previous indicator if saved settings exist and indicator is available
+        const savedSettings = getSettings();
+        if (savedSettings && savedSettings.indicatorId) {
+            const savedIndicator = syncData.indicators.find(ind => ind.id === savedSettings.indicatorId);
+            if (savedIndicator) {
+                console.log('🔄 Auto-loading previous indicator with saved settings:', savedIndicator.name);
+                // Use loadIndicatorWithLocalValues to restore all saved settings
+                loadIndicatorWithLocalValues(savedIndicator);
+                updateStatus(`🔄 Restored previous settings for ${savedIndicator.name}`, 'success');
+                setTimeout(() => statusMessage.textContent = '', 3000);
+                return; // Don't show the sync notification since we're restoring
+            }
+        }
+
+        // Show notification only if we didn't auto-load
         if (statusMessage) {
             updateStatus(`🔄 Synced ${syncData.indicators.length} indicators from TradingView`, 'success');
             setTimeout(() => statusMessage.textContent = '', 5000);
@@ -406,10 +420,14 @@ function restoreJob(job) {
         if (cfg.indicatorId) {
             // Try to find indicator in local sync data to get inputs
             const syncData = getSyncData();
-            if (syncData) {
+            if (syncData && syncData.indicators) {
                 const indicator = syncData.indicators.find(ind => ind.id === cfg.indicatorId);
 
                 if (indicator && indicator.inputs) {
+                    // Store the indicator object for "Load Saved Settings" button
+                    window.currentIndicatorObj = indicator;
+                    state.indicatorId = indicator.id;
+
                     // Temporarily set savedOptionsAndRanges so renderOptions uses them
                     window.savedOptionsAndRanges = {
                         indicatorId: cfg.indicatorId,
@@ -417,7 +435,8 @@ function restoreJob(job) {
                         ranges: cfg.ranges
                     };
 
-                    renderOptions(indicator.inputs);
+                    // renderOptions expects the full indicator object, not just inputs
+                    renderOptions(indicator);
 
                     // Update state explicitly just in case
                     state.options = cfg.options || {};
@@ -437,7 +456,7 @@ function restoreJob(job) {
     // Check if we have saved settings to show the button
     const savedSettings = getSettings();
     if (savedSettings && savedSettings.indicatorId === state.indicatorId) {
-        loadSavedSettingsBtn.classList.remove('hidden');
+        reloadPreviousSettingsBtn.classList.remove('hidden');
     }
 
     resultsTableBody.innerHTML = '';
@@ -852,10 +871,10 @@ function loadIndicatorWithTVValues(indicator) {
     historyBtn.classList.remove('hidden');
 
     // Check if we should show "Load Saved Settings" button
-    loadSavedSettingsBtn.classList.add('hidden');
+    reloadPreviousSettingsBtn.classList.add('hidden');
     const savedSettings = getSettings();
     if (savedSettings && savedSettings.indicatorId === indicator.id) {
-        loadSavedSettingsBtn.classList.remove('hidden');
+        reloadPreviousSettingsBtn.classList.remove('hidden');
     }
 
     // Note: No need to convert inputs format - they're already enriched objects from extension
@@ -916,7 +935,7 @@ function loadIndicatorWithLocalValues(indicator) {
     // Show History Button
     historyBtn.classList.remove('hidden');
     // Ensure Load Saved Settings is visible since we just loaded from it
-    loadSavedSettingsBtn.classList.remove('hidden');
+    reloadPreviousSettingsBtn.classList.remove('hidden');
 
     // Restore from localStorage
     const settings = getSettings();
@@ -927,6 +946,31 @@ function loadIndicatorWithLocalValues(indicator) {
             ranges: settings.ranges || {}
         };
         console.log('Loaded localStorage values:', settings.options);
+
+        // Also restore symbols, timeframes, and date range
+        if (settings.symbols && Array.isArray(settings.symbols)) {
+            state.symbols = settings.symbols;
+            renderSymbols();
+            console.log('Restored symbols:', settings.symbols);
+        }
+
+        // Restore timeframes
+        if (settings.timeframes) {
+            document.querySelectorAll('input[name="timeframe"]').forEach(cb => {
+                cb.checked = settings.timeframes.includes(cb.value);
+            });
+            console.log('Restored timeframes:', settings.timeframes);
+        }
+
+        // Restore date range
+        if (settings.dateFrom) {
+            dateFromInput.value = settings.dateFrom;
+            console.log('Restored dateFrom:', settings.dateFrom);
+        }
+        if (settings.dateTo) {
+            dateToInput.value = settings.dateTo;
+            console.log('Restored dateTo:', settings.dateTo);
+        }
     } else {
         // Different indicator or no saved settings, clear saved values
         window.savedOptionsAndRanges = null;
