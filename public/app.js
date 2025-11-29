@@ -39,6 +39,10 @@ const historyModal = document.getElementById('historyModal');
 const closeHistoryBtn = document.getElementById('closeHistoryBtn');
 const historyTableBody = document.getElementById('historyTableBody');
 
+// Parallel connections input
+const parallelInput = document.getElementById('parallelInput');
+const badgeHint = document.getElementById('badgeHint');
+
 // LocalStorage helper functions
 function getSyncData() {
     try {
@@ -48,6 +52,64 @@ function getSyncData() {
         console.error('Error parsing sync data:', e);
         return null;
     }
+}
+
+// Default plan connections mapping
+// Conservative limits to avoid TradingView 429 rate limiting
+const DEFAULT_PLAN_CONNECTIONS = {
+    'Free': 1,
+    'Essential': 2,
+    'Plus': 4,
+    'Premium': 8,
+    'Ultimate': 15
+};
+
+// Get saved parallel value or default for account type
+function getSavedParallelValue() {
+    const saved = localStorage.getItem('parallelConnections');
+    return saved ? parseInt(saved, 10) : null;
+}
+
+// Save parallel value
+function saveParallelValue(value) {
+    localStorage.setItem('parallelConnections', value.toString());
+}
+
+// Get max connections for current account (uses saved value or default)
+function getMaxConnections(accountType) {
+    const saved = getSavedParallelValue();
+    if (saved && saved >= 1) {
+        return saved;
+    }
+    return DEFAULT_PLAN_CONNECTIONS[accountType] || DEFAULT_PLAN_CONNECTIONS['Free'] || 1;
+}
+
+// Get recommended value for account type
+function getRecommendedConnections(accountType) {
+    return DEFAULT_PLAN_CONNECTIONS[accountType] || 1;
+}
+
+// Update account badge display
+function updateAccountBadge(accountType) {
+    const badge = document.getElementById('accountBadge');
+    if (!badge) return;
+    
+    const planSpan = badge.querySelector('.badge-plan');
+    
+    // Always show badge (even for Free accounts, so user can adjust parallel value)
+    const recommended = getRecommendedConnections(accountType || 'Free');
+    const currentValue = getSavedParallelValue() || recommended;
+    
+    if (planSpan) planSpan.textContent = accountType || 'Free';
+    if (parallelInput) {
+        parallelInput.value = currentValue;
+        parallelInput.max = Math.max(50, recommended * 3); // Allow up to 3x recommended or 50
+    }
+    if (badgeHint) {
+        badgeHint.textContent = `(recommandé: ${recommended})`;
+    }
+    
+    badge.classList.remove('hidden');
 }
 
 function getSettings() {
@@ -70,6 +132,26 @@ function updateStatus(message, type = 'info') {
     statusMessage.className = `status-message ${type}`;
 }
 
+// Show 429 rate limit warning
+function showRateLimitWarning() {
+    const syncData = getSyncData();
+    const accountType = syncData?.accountType || 'Free';
+    const recommended = getRecommendedConnections(accountType);
+    
+    // Flash the badge and hint to draw attention
+    const badge = document.getElementById('accountBadge');
+    if (badge) {
+        badge.classList.add('rate-limit-error');
+        setTimeout(() => badge.classList.remove('rate-limit-error'), 3000);
+    }
+    
+    // Update status with helpful message
+    updateStatus(
+        `⚠️ Erreur 429 - TradingView limite les connexions. Réduisez le nombre de backtests parallèles (recommandé: ${recommended} pour ${accountType}).`,
+        'error'
+    );
+}
+
 // Event Listeners
 historyBtn.addEventListener('click', openHistoryModal);
 closeHistoryBtn.addEventListener('click', () => historyModal.classList.add('hidden'));
@@ -81,6 +163,17 @@ loadSavedSettingsBtn.addEventListener('click', () => {
         loadIndicatorWithLocalValues(window.currentIndicatorObj);
     }
 });
+
+// Parallel input listener - save on change
+if (parallelInput) {
+    parallelInput.addEventListener('change', () => {
+        const value = parseInt(parallelInput.value, 10);
+        if (!isNaN(value) && value >= 1) {
+            saveParallelValue(value);
+            console.log('💾 Saved parallel connections:', value);
+        }
+    });
+}
 
 addSymbolBtn.addEventListener('click', handleAddSymbol);
 newSymbolInput.addEventListener('keypress', (e) => {
@@ -143,7 +236,15 @@ function autoLoadFromSync(syncData) {
     // Ensure data is saved to localStorage for other functions (like fetchHistory)
     localStorage.setItem('tvBacktestSyncData', JSON.stringify(syncData));
 
-    console.log('🚀 Auto-loading from sync data...');
+    console.log('🚀 Auto-loading from sync data:', JSON.stringify(syncData, null, 2));
+
+    // Update account badge if account type is available
+    if (syncData.accountType) {
+        updateAccountBadge(syncData.accountType);
+        console.log(`👤 Account type: ${syncData.accountType}`);
+    } else {
+        console.warn('⚠️ No accountType in syncData');
+    }
 
     // Ensure step1 is visible when syncing from extension
     const step1 = document.getElementById('step1');
@@ -381,18 +482,39 @@ function connectWebSocket(jobId) {
     ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
 
-        if (msg.type === 'progress') {
-            statusMessage.textContent = `Progress: ${msg.current}/${msg.total} (${msg.percent}%)`;
-            statusMessage.style.color = '';
+        if (msg.type === 'pending') {
+            // Add a pending row to show what's queued
+            addPendingRow(msg.data);
+        } else if (msg.type === 'running') {
+            // Update row to show it's currently running
+            updateRowStatus(msg.data, 'running');
+        } else if (msg.type === 'progress') {
+            // Update progress bar (no text status message)
+            updateProgressBar(msg.percent, msg.current, msg.total);
         } else if (msg.type === 'result') {
             state.results.push(msg.data);
-            addResultRow(msg.data);
+            updateRowWithResult(msg.data);
+            
+            // Check if result contains a 429 error - show special warning
+            if (msg.data.error && msg.data.error.includes('429')) {
+                showRateLimitWarning();
+            }
+        } else if (msg.type === 'retrying') {
+            // Update the specific row to show retry status (orange)
+            updateRowWithRetrying(msg.data);
+        } else if (msg.type === 'retry_complete') {
+            // A retry completed successfully - update handled by 'result' message
+            console.log('✓ Retry completed:', msg.data.symbol, msg.data.timeframe);
         } else if (msg.type === 'complete') {
             statusMessage.textContent = '✅ Backtest complete!';
             statusMessage.style.color = '#4CAF50';
             resetButtons();
             ws.close();
         } else if (msg.type === 'error') {
+            // Check if error is rate limit (429)
+            if (msg.message && msg.message.includes('429')) {
+                showRateLimitWarning();
+            }
             statusMessage.textContent = '❌ Error: ' + msg.message;
             statusMessage.style.color = '#ff4444';
             resetButtons();
@@ -404,6 +526,91 @@ function connectWebSocket(jobId) {
         console.error('WebSocket error:', error);
         statusMessage.textContent = 'Connection error';
     };
+}
+
+// Retry a failed backtest
+async function retryBacktest(row) {
+    const symbol = row.dataset.symbol;
+    const timeframe = row.dataset.timeframe;
+    const options = JSON.parse(row.dataset.options || '{}');
+    
+    if (!symbol || !timeframe) {
+        console.error('Missing symbol or timeframe for retry');
+        return;
+    }
+    
+    const syncData = getSyncData();
+    if (!syncData || !syncData.session) {
+        alert('Session TradingView non disponible. Veuillez synchroniser.');
+        return;
+    }
+    
+    // Update row to show retrying
+    row.classList.remove('result-row-error');
+    row.classList.add('result-row-running');
+    row.innerHTML = `
+        <td>${symbol}</td>
+        <td>${timeframe}</td>
+        <td><small>${formatOptions(options)}</small></td>
+        <td colspan="6" class="pending-cell">
+            <span class="running-indicator">🔄 Retrying...</span>
+        </td>
+    `;
+    
+    try {
+        const response = await fetch('/api/retry-backtest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                symbol,
+                timeframe,
+                options,
+                indicatorId: state.indicatorId,
+                dateFrom: dateFromInput.value,
+                dateTo: dateToInput.value,
+                session: syncData.session,
+                signature: syncData.signature,
+                jobId: state.currentJobId
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success && data.result) {
+            // Update state with new result
+            const existingIndex = state.results.findIndex(r => 
+                r.symbol === symbol && 
+                r.timeframe === timeframe && 
+                JSON.stringify(r.options) === JSON.stringify(options)
+            );
+            
+            if (existingIndex >= 0) {
+                state.results[existingIndex] = data.result;
+            } else {
+                state.results.push(data.result);
+            }
+            
+            updateRowWithResult(data.result);
+        } else {
+            // Update with error
+            const errorResult = data.result || {
+                symbol,
+                timeframe,
+                options,
+                error: data.error || 'Retry failed'
+            };
+            updateRowWithResult(errorResult);
+        }
+    } catch (err) {
+        console.error('Retry error:', err);
+        const errorResult = {
+            symbol,
+            timeframe,
+            options,
+            error: err.message || 'Network error during retry'
+        };
+        updateRowWithResult(errorResult);
+    }
 }
 
 // Helper: Generate range values (Client-side)
@@ -540,6 +747,18 @@ async function runBacktest() {
     }
 
     try {
+        // Get account type from sync data
+        const accountType = syncData ? (syncData.accountType || 'Free') : 'Free';
+        // Get parallel value from input or use saved/default
+        const maxParallelConnections = parallelInput ? parseInt(parallelInput.value, 10) : getMaxConnections(accountType);
+        
+        // Save the value for next time
+        if (parallelInput && !isNaN(maxParallelConnections)) {
+            saveParallelValue(maxParallelConnections);
+        }
+        
+        console.log('📊 Starting backtest with accountType:', accountType, 'maxParallel:', maxParallelConnections);
+        
         const response = await fetch('/api/backtest', {
             method: 'POST',
             headers: {
@@ -556,7 +775,9 @@ async function runBacktest() {
                 dateFrom: dateFromInput.value,
                 dateTo: dateToInput.value,
                 session: session, // Include session
-                signature: signature // Include signature
+                signature: signature, // Include signature
+                accountType: accountType, // Include account type for parallel execution
+                maxParallelConnections: maxParallelConnections // User-configured limit
             })
         });
 
@@ -1240,10 +1461,26 @@ function updateRangeValueCount(key) {
     updateBacktestSummary();
 }
 
+// Timeframe period limits (in days) - recommended max period for each timeframe
+const TIMEFRAME_PERIOD_LIMITS = {
+    '1': 30,      // 1 minute: max 30 days
+    '5': 180,     // 5 minutes: max 6 months
+    '15': 365,    // 15 minutes: max 1 year
+    '30': 730,    // 30 minutes: max 2 years
+    '60': 730,    // 1 hour: max 2 years
+    '240': 1825,  // 4 hours: max 5 years
+    '1D': 3650,   // 1 day: max 10 years
+    'D': 3650,    // 1 day (alternate): max 10 years
+    '1W': 7300,   // 1 week: max 20 years
+    'W': 7300,    // 1 week (alternate): max 20 years
+    '1M': 14600   // 1 month: max 40 years
+};
+
 function updateBacktestSummary() {
     // Calculate total backtests
     const symbolCount = state.symbols.length;
-    const timeframeCount = Array.from(document.querySelectorAll('input[name="timeframe"]:checked')).length;
+    const selectedTimeframes = Array.from(document.querySelectorAll('input[name="timeframe"]:checked'));
+    const timeframeCount = selectedTimeframes.length;
 
     // Calculate total option combinations
     let totalCombinations = 1;
@@ -1284,6 +1521,19 @@ function updateBacktestSummary() {
 
         detailsElement.textContent = breakdown;
 
+        // Check for timeframe/period warnings
+        const periodWarnings = checkTimeframePeriodWarnings(selectedTimeframes);
+        const warningElement = document.getElementById('periodWarning');
+        const warningMessage = document.getElementById('periodWarningMessage');
+        if (warningElement && warningMessage) {
+            if (periodWarnings.length > 0) {
+                warningMessage.innerHTML = periodWarnings.join('<br>');
+                warningElement.classList.remove('hidden');
+            } else {
+                warningElement.classList.add('hidden');
+            }
+        }
+
         // Color-code the total based on size
         if (totalBacktests > 500) {
             totalElement.style.background = 'linear-gradient(45deg, #ff9800, #f44336)';
@@ -1307,6 +1557,57 @@ function resetButtons() {
     stopBacktestBtn.classList.add('hidden');
     state.currentJobId = null;
     localStorage.removeItem('currentJobId'); // Clear active job
+    // Hide progress bar
+    hideProgressBar();
+}
+
+// Progress bar functions
+function updateProgressBar(percent, current, total) {
+    const progressContainer = document.getElementById('progressBarContainer');
+    const progressFill = document.getElementById('progressBarFill');
+    const progressText = document.getElementById('progressBarText');
+    const progressPercent = document.getElementById('progressBarPercent');
+    
+    if (progressContainer && progressFill && progressText) {
+        progressContainer.classList.remove('hidden');
+        progressFill.style.width = `${percent}%`;
+        progressText.textContent = `${current} / ${total}`;
+        if (progressPercent) {
+            progressPercent.textContent = `${percent}%`;
+        }
+    }
+}
+
+function hideProgressBar() {
+    const progressContainer = document.getElementById('progressBarContainer');
+    if (progressContainer) {
+        progressContainer.classList.add('hidden');
+    }
+}
+
+// Check timeframe/period warnings
+function checkTimeframePeriodWarnings(selectedTimeframes) {
+    const warnings = [];
+    const dateFrom = dateFromInput.value;
+    const dateTo = dateToInput.value;
+    
+    if (!dateFrom || !dateTo) return warnings;
+    
+    const fromDate = new Date(dateFrom);
+    const toDate = new Date(dateTo);
+    const periodDays = Math.ceil((toDate - fromDate) / (1000 * 60 * 60 * 24));
+    
+    selectedTimeframes.forEach(checkbox => {
+        const tf = checkbox.value;
+        const limit = TIMEFRAME_PERIOD_LIMITS[tf];
+        
+        if (limit && periodDays > limit) {
+            const tfLabel = checkbox.parentElement?.textContent?.trim() || tf;
+            warnings.push(`${tfLabel}: Period of ${periodDays} days exceeds recommended ${limit} days. May cause timeouts.`);
+        }
+    });
+    
+    return warnings;
 }
 
 async function stopBacktest() {
@@ -1353,6 +1654,143 @@ function formatOptions(options, metadata = state.inputMetadata) {
 
     // Show "No ranges" if no ranged options
     return 'Default settings';
+}
+
+// Generate unique row ID for pending/running/result tracking (CSS-safe)
+function getRowId(data) {
+    // Create a simple hash from the options to avoid special characters
+    const optionsStr = JSON.stringify(data.options || {});
+    let hash = 0;
+    for (let i = 0; i < optionsStr.length; i++) {
+        const char = optionsStr.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    return `${data.symbol.replace(/[^a-zA-Z0-9]/g, '_')}-${data.timeframe}-${Math.abs(hash)}`;
+}
+
+// Add a pending row (shows symbol, timeframe, options with loading indicator)
+function addPendingRow(data) {
+    const rowId = getRowId(data);
+    
+    // Check if row already exists
+    const existingRow = document.querySelector(`tr[data-row-id="${rowId}"]`);
+    if (existingRow) {
+        return;
+    }
+    
+    const row = document.createElement('tr');
+    row.dataset.rowId = rowId;
+    row.classList.add('result-row-pending');
+    row.innerHTML = `
+        <td>${data.symbol}</td>
+        <td>${data.timeframe}</td>
+        <td><small>${formatOptions(data.options)}</small></td>
+        <td colspan="6" class="pending-cell">
+            <span class="pending-indicator">⏳ Queued...</span>
+        </td>
+    `;
+    resultsTableBody.appendChild(row);
+}
+
+// Update row status to running
+function updateRowStatus(data, status) {
+    const rowId = getRowId(data);
+    const row = document.querySelector(`tr[data-row-id="${rowId}"]`);
+    
+    if (row) {
+        row.classList.remove('result-row-pending');
+        row.classList.add('result-row-running');
+        const pendingCell = row.querySelector('.pending-cell');
+        if (pendingCell) {
+            pendingCell.innerHTML = '<span class="running-indicator">🔄 Running...</span>';
+        }
+    }
+}
+
+// Update row to show retrying status (orange warning)
+function updateRowWithRetrying(data) {
+    const rowId = getRowId(data);
+    let row = document.querySelector(`tr[data-row-id="${rowId}"]`);
+    
+    if (!row) {
+        row = document.createElement('tr');
+        row.dataset.rowId = rowId;
+        resultsTableBody.appendChild(row);
+    }
+    
+    // Add retrying class (orange)
+    row.classList.remove('result-row-pending', 'result-row-running', 'result-row-error');
+    row.classList.add('result-row-retrying');
+    
+    row.innerHTML = `
+        <td>${data.symbol}</td>
+        <td>${data.timeframe}</td>
+        <td><small>${formatOptions(data.options)}</small></td>
+        <td colspan="6" class="warning-cell">
+            <span class="retry-indicator">⏳ ${data.message}</span>
+        </td>
+    `;
+}
+
+// Update row with actual result
+function updateRowWithResult(r) {
+    const rowId = getRowId(r);
+    let row = document.querySelector(`tr[data-row-id="${rowId}"]`);
+    
+    // If no existing row, create a new one
+    if (!row) {
+        row = document.createElement('tr');
+        row.dataset.rowId = rowId;
+        resultsTableBody.appendChild(row);
+    }
+    
+    // Remove pending/running/retrying classes
+    row.classList.remove('result-row-pending', 'result-row-running', 'result-row-retrying');
+    row.dataset.resultIndex = state.results.length - 1;
+    row.style.cursor = 'pointer';
+
+    if (r.error || !r.report) {
+        row.classList.add('result-row-error');
+        row.onclick = null; // No modal for errors
+        
+        // Store data for retry
+        row.dataset.symbol = r.symbol;
+        row.dataset.timeframe = r.timeframe;
+        row.dataset.options = JSON.stringify(r.options);
+        
+        row.innerHTML = `
+            <td>${r.symbol}</td>
+            <td>${r.timeframe}</td>
+            <td><small>${formatOptions(r.options)}</small></td>
+            <td colspan="5" class="negative">${r.error || 'Unknown error (No report data)'}</td>
+            <td>
+                <button class="retry-btn" onclick="event.stopPropagation(); retryBacktest(this.closest('tr'))">
+                    🔄 Retry
+                </button>
+            </td>
+        `;
+    } else {
+        row.onclick = () => openAnalyticsModal(r);
+        const netProfit = r.report.netProfit !== 'N/A' ? r.report.netProfit : null;
+        const netProfitClass = netProfit !== null && netProfit >= 0 ? 'positive' : 'negative';
+
+        if (netProfit !== null) {
+            row.classList.add(netProfit >= 0 ? 'result-row-profit' : 'result-row-loss');
+        }
+
+        row.innerHTML = `
+            <td>${r.symbol}</td>
+            <td>${r.timeframe}</td>
+            <td><small>${formatOptions(r.options)}</small></td>
+            <td class="${netProfitClass}">${formatNumber(r.report.netProfit)}</td>
+            <td>${r.report.totalClosedTrades !== 'N/A' ? r.report.totalClosedTrades : 'N/A'}</td>
+            <td>${formatNumber(r.report.percentProfitable)}${r.report.percentProfitable !== 'N/A' ? '%' : ''}</td>
+            <td>${formatNumber(r.report.profitFactor)}</td>
+            <td class="negative">${formatNumber(r.report.maxDrawdown)}%</td>
+            <td>${formatNumber(r.report.avgTrade)}</td>
+        `;
+    }
 }
 
 function addResultRow(r) {

@@ -122,6 +122,21 @@
                             <span class="breakdown-details" id="breakdownDetails"></span>
                         </div>
                     </div>
+                    <div id="accountBadge" class="account-badge hidden">
+                        <span class="badge-icon">👤</span>
+                        <span class="badge-plan">-</span>
+                        <span class="badge-connections">(<input type="number" id="parallelInput" min="1" max="50" value="1" title="Nombre de backtests en parallèle"> parallel)</span>
+                        <span class="badge-hint" id="badgeHint"></span>
+                    </div>
+                </div>
+
+                <!-- Period Warning -->
+                <div id="periodWarning" class="period-warning hidden">
+                    <div class="warning-icon">⚠️</div>
+                    <div class="warning-content">
+                        <div class="warning-title">Long Period Warning</div>
+                        <div class="warning-message" id="periodWarningMessage">-</div>
+                    </div>
                 </div>
 
                 <div class="actions mt-4">
@@ -135,6 +150,17 @@
             <!-- Step 3: Results -->
             <section class="card hidden" id="step3">
                 <h2>Results</h2>
+
+                <!-- Progress Bar -->
+                <div id="progressBarContainer" class="progress-bar-container hidden">
+                    <div class="progress-bar-track">
+                        <div id="progressBarFill" class="progress-bar-fill" style="width: 0%"></div>
+                    </div>
+                    <div class="progress-bar-footer">
+                        <span id="progressBarText" class="progress-text">0 / 0</span>
+                        <span id="progressBarPercent" class="progress-percent">0%</span>
+                    </div>
+                </div>
 
                 <div id="statusMessage" class="status-message"></div>
                 <div class="table-hint">💡 Click any row to view detailed analytics</div>

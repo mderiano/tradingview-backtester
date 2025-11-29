@@ -10,8 +10,52 @@ const path = require('path');
 const zlib = require('zlib');
 require('dotenv').config();
 
+// Global error handlers to catch unhandled WebSocket 429 errors
+// These prevent the server from crashing on TradingView rate limits
+process.on('uncaughtException', (err) => {
+    const errMsg = err.message || String(err);
+    if (errMsg.includes('429')) {
+        console.log(`⚠️ [Global] Caught 429 rate limit error: ${errMsg}`);
+        // Don't exit - this is a rate limit, not a fatal error
+    } else {
+        console.error('❌ [Global] Uncaught exception:', err);
+        // For non-429 errors, you might want to exit or handle differently
+    }
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    const errMsg = reason?.message || String(reason);
+    if (errMsg.includes('429')) {
+        console.log(`⚠️ [Global] Caught 429 rate limit rejection: ${errMsg}`);
+    } else {
+        console.error('❌ [Global] Unhandled rejection:', reason);
+    }
+});
+
+// Dynamic import for p-limit (ESM module)
+let pLimit;
+(async () => {
+    pLimit = (await import('p-limit')).default;
+})();
+
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// TradingView plan to parallel connections mapping
+// Using conservative limits to avoid 429 rate limiting
+// These are default values - client can override with custom settings
+const PLAN_CONNECTIONS = {
+    'Free': 1,
+    'Essential': 2,
+    'Plus': 4,
+    'Premium': 8,
+    'Ultimate': 15
+};
+
+// Get max parallel connections for a plan
+function getMaxConnections(accountType) {
+    return PLAN_CONNECTIONS[accountType] || PLAN_CONNECTIONS['Free'];
+}
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -100,6 +144,35 @@ wss.on('connection', (ws) => {
                 const job = jobs.get(data.jobId);
                 if (job) {
                     ws.send(JSON.stringify({ type: 'status', status: job.status }));
+                    
+                    // Send pending tasks if job has them
+                    if (job.tasks && job.tasks.length > 0) {
+                        job.tasks.forEach(task => {
+                            ws.send(JSON.stringify({ 
+                                type: 'pending', 
+                                data: { 
+                                    symbol: task.symbol, 
+                                    timeframe: task.timeframe, 
+                                    options: task.combo,
+                                    status: 'pending'
+                                } 
+                            }));
+                        });
+                    }
+                    
+                    // Send already completed results
+                    if (job.results && job.results.length > 0) {
+                        job.results.forEach(result => {
+                            ws.send(JSON.stringify({ type: 'result', data: result }));
+                        });
+                        // Send progress
+                        ws.send(JSON.stringify({
+                            type: 'progress',
+                            current: job.results.length,
+                            total: job.tasks ? job.tasks.length : job.results.length,
+                            percent: job.tasks ? Math.round((job.results.length / job.tasks.length) * 100) : 100
+                        }));
+                    }
                 }
             }
         } catch (e) {
@@ -118,11 +191,16 @@ wss.on('connection', (ws) => {
 
 // Broadcast to subscribers of a specific job
 function broadcast(jobId, message) {
+    let sentCount = 0;
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN && client.jobId === jobId) {
             client.send(JSON.stringify(message));
+            sentCount++;
         }
     });
+    if (message.type === 'rate_limit' || message.type === 'error') {
+        console.log(`📡 Broadcast ${message.type} to ${sentCount} clients for job ${jobId}`);
+    }
 }
 
 const cors = require('cors');
@@ -188,178 +266,321 @@ function cleanErrorMessage(err) {
     return errorMessage;
 }
 
-// Async Backtest Runner
-async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timeframes, dateFrom, dateTo, session, signature }) {
-    const job = jobs.get(jobId);
-    job.status = 'running';
-    saveJob(jobId); // Save initial state
-    broadcast(jobId, { type: 'status', status: 'running' });
+// Delay helper to avoid rate limiting
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Create a TradingView client with proper error handling for WebSocket 429 errors
+async function createTradingViewClient(session, signature) {
+    return new Promise((resolve, reject) => {
+        let resolved = false;
+        let rejected = false;
+        
+        // Create the client
+        const client = new TradingView.Client({
+            token: session,
+            signature: signature,
+            server: 'history-data',
+        });
+        
+        // Access internal WebSocket to add error handler
+        // The client stores the WebSocket in a private field, but we can access it via prototype
+        // Alternative: patch the library or use a global error handler
+        
+        // Listen for client-level errors
+        client.onError((...args) => {
+            if (!resolved && !rejected) {
+                rejected = true;
+                const errMsg = args.join(' ');
+                console.log(`⚠️ TradingView client error: ${errMsg}`);
+                reject(new Error(errMsg));
+            }
+        });
+        
+        // Listen for disconnection (which happens on 429)
+        client.onDisconnected(() => {
+            if (!resolved && !rejected) {
+                rejected = true;
+                console.log(`⚠️ TradingView client disconnected unexpectedly`);
+                reject(new Error('Client disconnected - possible rate limit (429)'));
+            }
+        });
+        
+        // TradingView client emits 'logged' when ready
+        client.onLogged(() => {
+            if (!rejected) {
+                resolved = true;
+                resolve(client);
+            }
+        });
+        
+        // Timeout if connection takes too long (usually means 429 or network issue)
+        setTimeout(() => {
+            if (!resolved && !rejected) {
+                rejected = true;
+                console.log(`⚠️ TradingView client connection timeout`);
+                try { client.end(); } catch(e) {}
+                reject(new Error('Client connection timeout - possible rate limit (429)'));
+            }
+        }, 15000); // 15 second timeout
+    });
+}
+
+// Execute a single backtest task (creates its own client)
+async function runSingleBacktest({ symbol, timeframe, combo, dateFrom, dateTo, indicatorId, session, signature, onRetrying }, retryCount = 0) {
+    // Create a dedicated client for this backtest
+    let client;
+    
+    // Errors that should trigger a retry
+    const isRetryableError = (errMsg) => {
+        return errMsg.includes('429') || 
+               errMsg.includes('rate limit') || 
+               errMsg.includes('timeout') || 
+               errMsg.includes('disconnected') ||
+               errMsg.includes('ECONNRESET') ||
+               errMsg.includes('ETIMEDOUT') ||
+               errMsg.includes('socket hang up') ||
+               errMsg.includes('network');
+    };
+    
+    // Errors that are critical and should NOT retry (auth/session issues)
+    const isCriticalError = (errMsg) => {
+        return errMsg.includes('session') || 
+               errMsg.includes('auth') || 
+               errMsg.includes('unauthorized') ||
+               errMsg.includes('forbidden') ||
+               errMsg.includes('invalid');
+    };
+    
+    try {
+        client = await createTradingViewClient(session, signature);
+    } catch (err) {
+        const errMsg = (err.message || String(err)).toLowerCase();
+        console.log(`⚠️ Client creation failed: ${err.message || err}`);
+        
+        // Critical errors - don't retry
+        if (isCriticalError(errMsg)) {
+            throw err;
+        }
+        
+        // Retryable errors - retry up to 3 times
+        if (retryCount < 3) {
+            const waitTime = (retryCount + 1) * 5;
+            console.log(`⚠️ Error occurred, waiting ${waitTime}s before retry (attempt ${retryCount + 1}/3)...`);
+            
+            // Notify frontend that we're retrying (show orange warning on the specific row)
+            if (onRetrying) {
+                onRetrying({
+                    symbol,
+                    timeframe,
+                    options: combo,
+                    attempt: retryCount + 1,
+                    maxAttempts: 3,
+                    waitTime,
+                    message: `Erreur - Retry ${retryCount + 1}/3 dans ${waitTime}s...`
+                });
+            }
+            
+            await delay(waitTime * 1000);
+            return runSingleBacktest({ symbol, timeframe, combo, dateFrom, dateTo, indicatorId, session, signature, onRetrying }, retryCount + 1);
+        }
+        
+        throw err;
+    }
 
     try {
-        // Use client-provided combinations
+        const strategy = await TradingView.getIndicator(
+            indicatorId,
+            'last',
+            session,
+            signature
+        );
+
+        // Set options
+        Object.keys(combo).forEach(key => {
+            strategy.setOption(key, combo[key]);
+        });
+
+        // Create history session for deep backtesting
+        const history = new client.Session.History();
+
+        // Calculate timestamps from date inputs or default to 1 year
+        let from, to;
+
+        if (dateFrom && dateTo) {
+            from = Math.floor(new Date(dateFrom).getTime() / 1000);
+            to = Math.floor(new Date(dateTo).getTime() / 1000);
+        } else {
+            from = Math.floor(Date.now() / 1000) - (1 * 365 * 24 * 60 * 60);
+            to = Math.floor(Date.now() / 1000);
+        }
+
+        // Add 1-day buffer before start date
+        from = from - (24 * 60 * 60);
+
+        // Request deep backtest
+        history.requestHistoryData(symbol, from, to, strategy, { timeframe });
+
+        // Wait for history to load with timeout
+        const report = await new Promise((resolve, reject) => {
+            const timeoutMs = parseInt(process.env.BACKTEST_TIMEOUT_MS || '120000');
+            
+            let errorOccurred = false;
+            
+            // Set up error handling
+            history.onError((...error) => {
+                errorOccurred = true;
+                history.delete();
+                reject(new Error(error.join(' ')));
+            });
+
+            const timeout = setTimeout(() => {
+                if (!errorOccurred) {
+                    history.delete();
+                    reject(new Error(`Timeout waiting for deep backtest report after ${timeoutMs}ms`));
+                }
+            }, timeoutMs);
+
+            history.onHistoryLoaded(() => {
+                clearTimeout(timeout);
+                if (!errorOccurred) {
+                    resolve(history.strategyReport);
+                }
+            });
+        });
+
+        // Cleanup history session
+        history.delete();
+        
+        // Close the client
+        client.end();
+
+        return {
+            symbol,
+            timeframe,
+            options: combo,
+            report: report && report.performance ? {
+                netProfit: report.performance.all?.netProfit ?? 'N/A',
+                totalClosedTrades: report.performance.all?.totalTrades ?? 'N/A',
+                percentProfitable: report.performance.all?.percentProfitable ?
+                    (report.performance.all.percentProfitable * 100) : 'N/A',
+                profitFactor: report.performance.all?.profitFactor ?? 'N/A',
+                maxDrawdown: report.performance.maxStrategyDrawDownPercent ?
+                    (report.performance.maxStrategyDrawDownPercent * 100) : 'N/A',
+                avgTrade: report.performance.all?.avgTrade ?? 'N/A'
+            } : null,
+            fullReport: report
+        };
+    } catch (error) {
+        // Make sure to close client on error
+        client.end();
+        throw error;
+    }
+}
+
+// Async Backtest Runner with Parallel Execution
+async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timeframes, dateFrom, dateTo, session, signature, accountType, maxParallelConnections }) {
+    const job = jobs.get(jobId);
+    
+    // Wait a bit for WebSocket client to connect before starting
+    // This ensures the frontend receives all pending/running status updates
+    await delay(500);
+    
+    job.status = 'running';
+    saveJob(jobId);
+    broadcast(jobId, { type: 'status', status: 'running' });
+    
+    console.log(`Job ${jobId}: Account type: ${accountType}, Max parallel connections: ${maxParallelConnections}`);
+
+    try {
         const optionCombinations = combinations;
         const totalTests = symbols.length * timeframes.length * optionCombinations.length;
 
-        console.log(`Job ${jobId}: Starting ${totalTests} tests`);
-        broadcast(jobId, { type: 'info', message: `Starting ${totalTests} tests...` });
+        console.log(`Job ${jobId}: Starting ${totalTests} tests with ${maxParallelConnections} parallel connections`);
+        broadcast(jobId, { type: 'info', message: `Starting ${totalTests} tests (${maxParallelConnections} parallel)...` });
 
-        // Runtime Credential Check
         if (!session || !signature) {
             throw new Error('Missing TradingView credentials. Please sync via the Chrome Extension.');
         }
 
+        // Create limit function for parallel execution
+        const limit = pLimit(maxParallelConnections);
         let completedTests = 0;
+        let criticalError = false; // Only for session/auth errors
 
-        // Create a shared client for this batch using Deep Backtesting (Premium only)
-        // This uses TradingView's history-data server for deep historical data
-        const client = new TradingView.Client({
-            token: session,
-            signature: signature,
-            server: 'history-data', // Premium feature - deep backtesting
-        });
-
-        // Process sequentially
+        // Build all test tasks
+        const tasks = [];
         for (const symbol of symbols) {
             for (const timeframe of timeframes) {
                 for (const combo of optionCombinations) {
-                    // Check if job was cancelled
-                    if (job.cancelled) {
-                        console.log(`Job ${jobId} was cancelled`);
-                        client.end();
-                        return;
-                    }
+                    tasks.push({ symbol, timeframe, combo });
+                }
+            }
+        }
 
-                    try {
-                        console.log(`Testing: ${symbol} ${timeframe} options=${JSON.stringify(combo)}`);
+        // Store tasks in job object so they can be sent to late-connecting clients
+        job.tasks = tasks;
 
-                        const strategy = await TradingView.getIndicator(
-                            indicatorId,
-                            'last',
-                            session,
-                            signature
-                        );
+        // Send pending status for all tasks to frontend (so they can show loading state)
+        tasks.forEach(task => {
+            broadcast(jobId, { 
+                type: 'pending', 
+                data: { 
+                    symbol: task.symbol, 
+                    timeframe: task.timeframe, 
+                    options: task.combo,
+                    status: 'pending'
+                } 
+            });
+        });
 
-                        // Set options
-                        Object.keys(combo).forEach(key => {
-                            strategy.setOption(key, combo[key]);
-                        });
+        // Track task index for staggered starts
+        let taskIndex = 0;
 
-                        // Create history session for deep backtesting
-                        const history = new client.Session.History();
+        // Execute tasks in parallel with concurrency limit
+        const promises = tasks.map(task => 
+            limit(async () => {
+                // Check if job was cancelled or has critical error
+                if (job.cancelled || criticalError) {
+                    return null;
+                }
 
-                        // Set up error handling
-                        history.onError((...error) => {
-                            console.error('History error:', error);
-                            history.delete();
-                            throw new Error(error.join(' '));
-                        });
+                // Add small delay between task starts to avoid rate limiting
+                const myIndex = taskIndex++;
+                if (myIndex > 0) {
+                    await delay(500); // 500ms delay between each new connection
+                }
 
-                        // Calculate timestamps from date inputs or default to 1 year
-                        let from, to;
+                const { symbol, timeframe, combo } = task;
 
-                        if (dateFrom && dateTo) {
-                            // Convert date strings (YYYY-MM-DD) to Unix timestamps
-                            from = Math.floor(new Date(dateFrom).getTime() / 1000);
-                            to = Math.floor(new Date(dateTo).getTime() / 1000);
-                        } else {
-                            // Default: from 1 year ago to now
-                            from = Math.floor(Date.now() / 1000) - (1 * 365 * 24 * 60 * 60);
-                            to = Math.floor(Date.now() / 1000);
+                // Notify frontend that this test is now running
+                broadcast(jobId, { 
+                    type: 'running', 
+                    data: { symbol, timeframe, options: combo, status: 'running' } 
+                });
+
+                try {
+                    console.log(`Testing: ${symbol} ${timeframe} options=${JSON.stringify(combo)}`);
+
+                    // Each backtest creates its own client
+                    const result = await runSingleBacktest({
+                        symbol,
+                        timeframe,
+                        combo,
+                        dateFrom,
+                        dateTo,
+                        indicatorId,
+                        session,
+                        signature,
+                        onRetrying: (retryInfo) => {
+                            console.log(`📡 Broadcasting retry status for ${symbol} ${timeframe}: attempt ${retryInfo.attempt}/${retryInfo.maxAttempts}`);
+                            broadcast(jobId, { type: 'retrying', data: retryInfo });
                         }
+                    });
 
-                        // Add 1-day buffer before start date to avoid missing trades at boundary
-                        // TradingView API has a boundary condition where trades very close to
-                        // the exact start timestamp may be excluded. Subtracting 1 day ensures
-                        // we capture all trades in the requested range.
-                        from = from - (24 * 60 * 60); // Subtract 1 day in seconds
+                    console.log(`✓ Completed: ${symbol} ${timeframe} - ${result.report?.totalClosedTrades || 0} trades`);
 
-                        // Request deep backtest
-                        history.requestHistoryData(symbol, from, to, strategy, { timeframe });
-
-                        // Wait for history to load
-                        const report = await new Promise((resolve, reject) => {
-                            // Use configurable timeout (default 120s for production environments)
-                            // Production servers may have slower network connections to TradingView
-                            const timeoutMs = parseInt(process.env.BACKTEST_TIMEOUT_MS || '120000');
-
-                            let timeout = setTimeout(() => {
-                                history.delete();
-                                reject(new Error(`Timeout waiting for deep backtest report after ${timeoutMs}ms`));
-                            }, timeoutMs);
-
-                            history.onHistoryLoaded(() => {
-                                clearTimeout(timeout);
-                                resolve(history.strategyReport);
-                            });
-                        });
-
-                        console.log(`✓ Deep backtest report received for ${symbol} ${timeframe}`);
-
-                        // DEBUG: Log data availability and strategy settings
-                        if (report && report.settings && report.settings.dateRange) {
-                            const fromDate = new Date(report.settings.dateRange.backtest.from).toISOString().split('T')[0];
-                            const toDate = new Date(report.settings.dateRange.backtest.to).toISOString().split('T')[0];
-                            console.log(`  Backtest date range: ${fromDate} to ${toDate}`);
-                        }
-                        console.log(`  Total trades: ${report?.performance?.all?.totalTrades || 0}`);
-
-                        const result = {
-                            symbol,
-                            timeframe,
-                            options: combo,
-                            report: report && report.performance ? {
-                                netProfit: report.performance.all?.netProfit ?? 'N/A',
-                                totalClosedTrades: report.performance.all?.totalTrades ?? 'N/A',
-                                percentProfitable: report.performance.all?.percentProfitable ?
-                                    (report.performance.all.percentProfitable * 100) : 'N/A',
-                                profitFactor: report.performance.all?.profitFactor ?? 'N/A',
-                                maxDrawdown: report.performance.maxStrategyDrawDownPercent ?
-                                    (report.performance.maxStrategyDrawDownPercent * 100) : 'N/A',
-                                avgTrade: report.performance.all?.avgTrade ?? 'N/A'
-                            } : null,
-                            // Include full report for detailed analytics modal
-                            fullReport: report
-                        };
-
-                        job.results.push(result);
-                        saveJob(jobId); // Save progress (optional, maybe too frequent? Let's save on batch or completion to avoid IO spam)
-                        // Actually, for long running jobs, saving periodically is good. Let's save every 10 results or so?
-                        // For now, let's just save on completion to avoid performance hit, or maybe every 5 minutes.
-                        // Let's stick to saving on completion/error for now, and maybe update status.
-
-                        broadcast(jobId, { type: 'result', data: result });
-
-                        // Cleanup history session
-                        history.delete();
-
-                    } catch (err) {
-                        console.error(`Failed test for ${symbol} ${timeframe}:`, err);
-
-                        const errorMessage = cleanErrorMessage(err);
-
-                        // Stop the job on error as requested
-                        console.log(`Job ${jobId} stopping due to error: ${errorMessage}`);
-                        job.status = 'failed';
-                        job.error = errorMessage;
-                        saveJob(jobId); // Save error state
-
-                        // Send the error result so it shows in the table
-                        const errorResult = {
-                            symbol,
-                            timeframe,
-                            options: combo,
-                            error: errorMessage
-                        };
-                        job.results.push(errorResult);
-                        broadcast(jobId, { type: 'result', data: errorResult });
-
-                        // Broadcast fatal error to stop frontend
-                        broadcast(jobId, { type: 'error', message: errorMessage });
-
-                        // Cleanup client
-                        client.end();
-                        return; // Stop the job
-                    }
+                    job.results.push(result);
+                    broadcast(jobId, { type: 'result', data: result });
 
                     completedTests++;
                     broadcast(jobId, {
@@ -368,15 +589,82 @@ async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timef
                         total: totalTests,
                         percent: Math.round((completedTests / totalTests) * 100)
                     });
+
+                    return result;
+
+                } catch (err) {
+                    console.error(`Failed test for ${symbol} ${timeframe}:`, err);
+                    
+                    const errorMessage = cleanErrorMessage(err);
+                    
+                    // Check if this is a 429 rate limit error or timeout (which usually means rate limit)
+                    const isRateLimitError = errorMessage.includes('429') || 
+                                            errorMessage.includes('timeout') ||
+                                            errorMessage.includes('rate limit') ||
+                                            errorMessage.includes('Limite TradingView');
+                    
+                    // Check if this is a critical error (session/auth) that should stop everything
+                    const isCriticalError = errorMessage.includes('session') || 
+                                           errorMessage.includes('auth') || 
+                                           errorMessage.includes('unauthorized') ||
+                                           errorMessage.includes('forbidden');
+                    
+                    if (isCriticalError) {
+                        criticalError = true;
+                        console.log(`Job ${jobId} stopping due to critical error: ${errorMessage}`);
+                        job.status = 'failed';
+                        job.error = errorMessage;
+                        saveJob(jobId);
+                        broadcast(jobId, { type: 'error', message: errorMessage });
+                    }
+                    
+                    // Send rate limit error notification separately so frontend can show warning
+                    if (isRateLimitError) {
+                        console.log(`Job ${jobId}: Rate limit/timeout error detected, broadcasting to frontend: ${errorMessage}`);
+                        broadcast(jobId, { type: 'rate_limit', message: errorMessage });
+                    }
+
+                    const errorResult = {
+                        symbol,
+                        timeframe,
+                        options: combo,
+                        error: errorMessage
+                    };
+                    job.results.push(errorResult);
+                    broadcast(jobId, { type: 'result', data: errorResult });
+
+                    completedTests++;
+                    broadcast(jobId, {
+                        type: 'progress',
+                        current: completedTests,
+                        total: totalTests,
+                        percent: Math.round((completedTests / totalTests) * 100)
+                    });
+
+                    return errorResult;
                 }
-            }
+            })
+        );
+
+        // Wait for all tasks to complete (or fail)
+        await Promise.all(promises);
+
+        // Check final status
+        if (job.cancelled) {
+            console.log(`Job ${jobId} was cancelled`);
+            return;
         }
 
-        client.end();
-        job.status = 'completed';
-        saveJob(jobId); // Save final state
-        broadcast(jobId, { type: 'complete', results: job.results });
-        console.log(`Job ${jobId}: Completed`);
+        // Count errors
+        const errorCount = job.results.filter(r => r.error).length;
+        const successCount = job.results.filter(r => !r.error).length;
+
+        if (!criticalError) {
+            job.status = errorCount > 0 ? 'completed_with_errors' : 'completed';
+            saveJob(jobId);
+            broadcast(jobId, { type: 'complete', results: job.results });
+            console.log(`Job ${jobId}: Completed (${successCount} success, ${errorCount} errors)`);
+        }
 
     } catch (error) {
         console.error(`Job ${jobId} failed:`, error);
@@ -390,11 +678,17 @@ async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timef
 // API: Start Backtest (Async)
 app.post('/api/backtest', (req, res) => {
     try {
-        const { indicatorId, combinations, ranges, symbols, timeframes, dateFrom, dateTo, session, signature } = req.body;
+        const { indicatorId, combinations, ranges, symbols, timeframes, dateFrom, dateTo, session, signature, accountType, maxParallelConnections: clientMaxConnections } = req.body;
 
         if (!session || !signature) {
             return res.status(401).json({ error: 'Missing TradingView credentials' });
         }
+
+        // Use client-provided limit or fall back to server defaults
+        const validAccountType = PLAN_CONNECTIONS[accountType] ? accountType : 'Free';
+        const maxParallelConnections = clientMaxConnections || getMaxConnections(validAccountType);
+        
+        console.log(`📊 New backtest: Account type: ${validAccountType}, Max parallel: ${maxParallelConnections} (client requested: ${clientMaxConnections || 'default'})`);
 
         const jobId = crypto.randomUUID();
         jobs.set(jobId, {
@@ -403,12 +697,14 @@ app.post('/api/backtest', (req, res) => {
             config: { indicatorId, combinations, ranges, symbols, timeframes, dateFrom, dateTo },
             results: [],
             startTime: Date.now(),
-            session: session // Save session to filter history later
+            session: session, // Save session to filter history later
+            accountType: validAccountType,
+            maxParallelConnections: maxParallelConnections
         });
 
         // Start job in background
         saveJob(jobId); // Save pending state
-        runBacktestJob(jobId, { indicatorId, combinations, symbols, timeframes, dateFrom, dateTo, session, signature });
+        runBacktestJob(jobId, { indicatorId, combinations, symbols, timeframes, dateFrom, dateTo, session, signature, accountType: validAccountType, maxParallelConnections });
 
         res.json({ id: jobId, message: 'Backtest started' });
 
@@ -602,6 +898,66 @@ app.post('/api/export', async (req, res) => {
 
     } catch (error) {
         console.error('Error exporting Excel:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// API: Retry a single failed backtest
+app.post('/api/retry-backtest', async (req, res) => {
+    try {
+        const { symbol, timeframe, options, indicatorId, dateFrom, dateTo, session, signature, jobId } = req.body;
+        
+        if (!symbol || !timeframe || !indicatorId || !session) {
+            return res.status(400).json({ error: 'Missing required parameters' });
+        }
+        
+        console.log(`🔄 Retrying backtest for ${symbol} ${timeframe}`);
+        
+        // Notify frontend that retry is starting
+        broadcast(jobId, { 
+            type: 'running', 
+            data: { symbol, timeframe, options, status: 'running' } 
+        });
+        
+        try {
+            const result = await runSingleBacktest({
+                symbol,
+                timeframe,
+                combo: options,
+                dateFrom,
+                dateTo,
+                indicatorId,
+                session,
+                signature,
+                onRetrying: (retryInfo) => {
+                    broadcast(jobId, { type: 'retrying', data: retryInfo });
+                }
+            });
+            
+            console.log(`✓ Retry completed: ${symbol} ${timeframe}`);
+            
+            // Broadcast result
+            broadcast(jobId, { type: 'result', data: result });
+            broadcast(jobId, { type: 'retry_complete', data: result });
+            
+            res.json({ success: true, result });
+        } catch (err) {
+            const errorMessage = cleanErrorMessage(err);
+            console.error(`❌ Retry failed for ${symbol} ${timeframe}:`, errorMessage);
+            
+            const errorResult = {
+                symbol,
+                timeframe,
+                options,
+                error: errorMessage
+            };
+            
+            broadcast(jobId, { type: 'result', data: errorResult });
+            
+            res.json({ success: false, error: errorMessage, result: errorResult });
+        }
+    } catch (error) {
+        console.error('Error in retry-backtest:', error);
         res.status(500).json({ error: error.message });
     }
 });

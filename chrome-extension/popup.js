@@ -465,12 +465,24 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
 
                         console.log("✅ TV Backtest: Extracted indicators:", found);
 
+                        // Extract TradingView account type from user badges
+                        let accountType = 'Free';
+                        try {
+                            if (window.user && window.user.badges && window.user.badges.length > 0) {
+                                accountType = window.user.badges[0].verbose_name || 'Free';
+                                console.log("✅ TV Backtest: Detected account type:", accountType);
+                            }
+                        } catch (e) {
+                            console.warn("Could not detect account type:", e);
+                        }
+
                         return {
                             session: session,
                             signature: signature,
                             indicators: found,
                             symbol: symbol,
-                            timeframe: timeframe
+                            timeframe: timeframe,
+                            accountType: accountType
                             // Note: grouping is now per-indicator (in indicators[].tabs and indicators[].groups)
                         };
                     } catch (e) {
@@ -492,12 +504,19 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
             }
 
             // 4. Save to chrome.storage.local directly (Client-side handling)
+            // Extract accountType from script result
+            let accountType = 'Free';
+            if (results && results[0] && results[0].result && results[0].result.accountType) {
+                accountType = results[0].result.accountType;
+            }
+
             const syncData = {
                 session: sessionCookie.value,
                 signature: signCookie ? signCookie.value : '',
                 indicators: indicators,
                 symbol: symbol,
                 timeframe: timeframe,
+                accountType: accountType,
                 syncedAt: new Date().toISOString()
                 // Note: grouping is now per-indicator (in indicators[].tabs and indicators[].groups)
             };
@@ -525,8 +544,28 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                 statusDiv.className = 'status success';
                 statusDiv.style.display = 'block';
 
-                // Open server in new tab
-                chrome.tabs.create({ url: serverUrl });
+                // Open server in new tab and inject data directly
+                chrome.tabs.create({ url: serverUrl }, async (newTab) => {
+                    // Wait for the tab to finish loading
+                    chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+                        if (tabId === newTab.id && info.status === 'complete') {
+                            chrome.tabs.onUpdated.removeListener(listener);
+                            
+                            // Inject the sync data directly into the page
+                            chrome.scripting.executeScript({
+                                target: { tabId: newTab.id },
+                                world: 'MAIN',
+                                args: [syncData],
+                                func: (data) => {
+                                    console.log('📥 Injected sync data directly:', data);
+                                    localStorage.setItem('tvBacktestSyncData', JSON.stringify(data));
+                                    // Trigger reload of app.js data
+                                    window.postMessage({ type: 'TV_BACKTEST_SYNC_DATA', data: data }, '*');
+                                }
+                            }).catch(err => console.error('Failed to inject sync data:', err));
+                        }
+                    });
+                });
 
                 btn.disabled = false;
                 btn.textContent = 'Sync with Backtester';

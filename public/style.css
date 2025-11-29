@@ -772,6 +772,107 @@ input:checked+.slider:before {
     margin-left: 1rem;
 }
 
+/* Account Badge */
+.account-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(99, 102, 241, 0.15);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+}
+
+.badge-icon {
+    font-size: 1rem;
+}
+
+.badge-plan {
+    font-weight: 600;
+    color: #a5b4fc;
+}
+
+.badge-connections {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+}
+
+/* Period Warning */
+.period-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    background: linear-gradient(to right, rgba(245, 158, 11, 0.15), transparent);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    padding: 1rem 1.5rem;
+    border-radius: 12px;
+    margin-bottom: 1.5rem;
+}
+
+.warning-icon {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+}
+
+.warning-content {
+    flex: 1;
+}
+
+.warning-title {
+    font-weight: 600;
+    color: var(--warning-color);
+    margin-bottom: 0.25rem;
+}
+
+.warning-message {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+/* Progress Bar */
+.progress-bar-container {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 1rem 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.progress-bar-track {
+    height: 10px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background: var(--accent-gradient);
+    border-radius: 5px;
+    transition: width 0.3s ease;
+}
+
+.progress-bar-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 0.5rem;
+}
+
+.progress-text {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.progress-percent {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--accent-color);
+}
+
 /* Actions */
 .actions {
     display: flex;
@@ -867,7 +968,87 @@ tbody tr:last-child td {
 }
 
 .result-row-error {
+    border-left: 4px solid var(--danger-color);
+    background-color: rgba(239, 68, 68, 0.1);
+}
+
+/* Retrying state - orange warning */
+.result-row-retrying {
     border-left: 4px solid var(--warning-color);
+    background-color: rgba(245, 158, 11, 0.1);
+    animation: pulse-warning 2s infinite;
+}
+
+@keyframes pulse-warning {
+    0%, 100% { background-color: rgba(245, 158, 11, 0.1); }
+    50% { background-color: rgba(245, 158, 11, 0.2); }
+}
+
+.warning-cell {
+    text-align: center;
+    color: var(--warning-color);
+}
+
+.retry-indicator {
+    color: var(--warning-color);
+    font-weight: 500;
+}
+
+/* Retry button */
+.retry-btn {
+    background: var(--accent-gradient);
+    border: none;
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: white;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.retry-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+}
+
+.retry-btn:active {
+    transform: scale(0.98);
+}
+
+/* Pending and Running row states */
+.result-row-pending {
+    border-left: 4px solid rgba(255, 255, 255, 0.3);
+    opacity: 0.7;
+}
+
+.result-row-running {
+    border-left: 4px solid var(--accent-color);
+    animation: pulse-border 1.5s infinite;
+}
+
+@keyframes pulse-border {
+    0%, 100% { border-left-color: var(--accent-color); }
+    50% { border-left-color: #a5b4fc; }
+}
+
+.pending-cell, .running-cell {
+    text-align: center;
+    color: var(--text-secondary);
+}
+
+.pending-indicator {
+    color: var(--text-secondary);
+}
+
+.running-indicator {
+    color: var(--accent-color);
+    animation: pulse-text 1s infinite;
+}
+
+@keyframes pulse-text {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
 }
 
 /* Trade type colors */
@@ -1135,4 +1316,75 @@ tbody tr:last-child td {
     height: 1px;
     background: linear-gradient(to right, transparent, rgba(255, 255, 255, 0.1), transparent);
     margin: 2.5rem 0;
+}
+
+/* Account Badge with editable parallel input */
+.account-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(99, 102, 241, 0.15);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: 8px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.9rem;
+    transition: all 0.3s ease;
+}
+
+.account-badge.rate-limit-error {
+    background: rgba(239, 68, 68, 0.25);
+    border-color: rgba(239, 68, 68, 0.5);
+    animation: shake 0.5s ease-in-out;
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+}
+
+.badge-icon {
+    font-size: 1.1rem;
+}
+
+.badge-plan {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.badge-connections {
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.badge-connections input[type="number"] {
+    width: 45px;
+    padding: 0.25rem 0.4rem;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    text-align: center;
+    -moz-appearance: textfield;
+}
+
+.badge-connections input[type="number"]::-webkit-outer-spin-button,
+.badge-connections input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.badge-connections input[type="number"]:focus {
+    outline: none;
+    border-color: var(--accent-color);
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.badge-hint {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    opacity: 0.8;
 }

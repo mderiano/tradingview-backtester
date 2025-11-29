@@ -11,12 +11,14 @@
     ],
     "host_permissions": [
         "https://*.tradingview.com/*",
-        "http://srv1159534.hstgr.cloud:3000/*"
+        "http://srv1159534.hstgr.cloud:3000/*",
+        "http://freebox.deriano.fr:3000/*"
     ],
     "content_scripts": [
         {
             "matches": [
-                "http://srv1159534.hstgr.cloud:3000/*"
+                "http://srv1159534.hstgr.cloud:3000/*",
+                "http://freebox.deriano.fr:3000/*"
             ],
             "js": [
                 "content-script.js"
