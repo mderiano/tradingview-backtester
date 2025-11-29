@@ -69,57 +69,313 @@ const jobs = new Map();
 // Ensure results directory exists
 const RESULTS_DIR = path.join(__dirname, 'results');
 if (!fs.existsSync(RESULTS_DIR)) {
-    fs.mkdirSync(RESULTS_DIR);
+    fs.mkdirSync(RESULTS_DIR, { recursive: true });
 }
 
-// Helper: Save job to disk
+// Generate a short hash from session ID for directory naming
+function getSessionHash(session) {
+    if (!session) return 'anonymous';
+    // Use first 16 chars of SHA256 hash of session for short but unique identifier
+    return crypto.createHash('sha256').update(session).digest('hex').substring(0, 16);
+}
+
+// Get or create user directory path
+function getUserDir(session) {
+    const sessionHash = getSessionHash(session);
+    const userDir = path.join(RESULTS_DIR, sessionHash);
+    if (!fs.existsSync(userDir)) {
+        fs.mkdirSync(userDir, { recursive: true });
+        console.log(`📁 Created user directory: ${sessionHash}`);
+    }
+    return userDir;
+}
+
+// Get index file path for a user
+function getIndexFilePath(session) {
+    const userDir = getUserDir(session);
+    return path.join(userDir, 'index.json');
+}
+
+// Load job index for a specific user
+function loadJobIndex(session) {
+    try {
+        const indexFile = getIndexFilePath(session);
+        if (fs.existsSync(indexFile)) {
+            const content = fs.readFileSync(indexFile, 'utf8');
+            return JSON.parse(content);
+        }
+    } catch (e) {
+        console.error('Error loading job index:', e);
+    }
+    return {};
+}
+
+// Save job index for a specific user
+function saveJobIndex(session, index) {
+    try {
+        const indexFile = getIndexFilePath(session);
+        fs.writeFileSync(indexFile, JSON.stringify(index, null, 2));
+    } catch (e) {
+        console.error('Error saving job index:', e);
+    }
+}
+
+// Update a single job's metadata in the index (requires session)
+function updateJobIndex(session, jobId, metadata) {
+    const index = loadJobIndex(session);
+    index[jobId] = {
+        ...index[jobId],
+        ...metadata,
+        updatedAt: Date.now()
+    };
+    saveJobIndex(session, index);
+}
+
+// Remove a job from the index (requires session)
+function removeFromJobIndex(session, jobId) {
+    const index = loadJobIndex(session);
+    delete index[jobId];
+    saveJobIndex(session, index);
+}
+
+// Migrate old results from root to user directories
+function migrateOldResults() {
+    console.log('🔄 Checking for old results to migrate...');
+    let migratedCount = 0;
+    
+    try {
+        const files = fs.readdirSync(RESULTS_DIR);
+        
+        for (const f of files) {
+            // Skip directories and index files
+            const filePath = path.join(RESULTS_DIR, f);
+            const stat = fs.statSync(filePath);
+            if (stat.isDirectory()) continue;
+            if (f === 'index.json') {
+                // Remove old global index
+                fs.unlinkSync(filePath);
+                console.log('🗑️ Removed old global index.json');
+                continue;
+            }
+            
+            if (f.endsWith('.json') || f.endsWith('.json.gz')) {
+                try {
+                    let job;
+                    const isGzipped = f.endsWith('.json.gz');
+                    
+                    if (isGzipped) {
+                        const gzContent = fs.readFileSync(filePath);
+                        const buffer = zlib.gunzipSync(gzContent);
+                        job = JSON.parse(buffer.toString());
+                    } else {
+                        const content = fs.readFileSync(filePath, 'utf8');
+                        job = JSON.parse(content);
+                    }
+                    
+                    const session = job.session || null;
+                    const userDir = getUserDir(session);
+                    const newFilePath = path.join(userDir, f);
+                    
+                    // Move file to user directory
+                    fs.renameSync(filePath, newFilePath);
+                    
+                    // Update user's index
+                    const jobId = f.replace('.json.gz', '').replace('.json', '');
+                    updateJobIndex(session, jobId, {
+                        id: job.id || jobId,
+                        status: job.status || (isGzipped ? 'archived' : 'unknown'),
+                        startTime: job.startTime || null,
+                        symbolCount: job.results?.length || 0,
+                        indicatorId: job.config?.indicatorId || null,
+                        symbols: job.config?.symbols || [],
+                        isArchived: isGzipped
+                    });
+                    
+                    migratedCount++;
+                } catch (e) {
+                    console.error(`Error migrating ${f}:`, e.message);
+                }
+            }
+        }
+        
+        if (migratedCount > 0) {
+            console.log(`✅ Migrated ${migratedCount} job(s) to user directories`);
+        } else {
+            console.log('✅ No old results to migrate');
+        }
+    } catch (e) {
+        console.error('Error during migration:', e);
+    }
+}
+
+// Rebuild index for a specific user directory
+function rebuildUserIndex(userDir, sessionHash) {
+    const index = {};
+    
+    try {
+        const files = fs.readdirSync(userDir);
+        
+        for (const f of files) {
+            if (f === 'index.json') continue;
+            
+            if (f.endsWith('.json')) {
+                try {
+                    const filePath = path.join(userDir, f);
+                    const content = fs.readFileSync(filePath, 'utf8');
+                    const job = JSON.parse(content);
+                    const jobId = f.replace('.json', '');
+                    
+                    index[jobId] = {
+                        id: job.id || jobId,
+                        status: job.status || 'unknown',
+                        startTime: job.startTime || null,
+                        symbolCount: job.results?.length || 0,
+                        indicatorId: job.config?.indicatorId || null,
+                        symbols: job.config?.symbols || [],
+                        isArchived: false,
+                        updatedAt: Date.now()
+                    };
+                } catch (e) {
+                    console.error(`Error reading job ${f} for index:`, e.message);
+                }
+            } else if (f.endsWith('.json.gz')) {
+                const jobId = f.replace('.json.gz', '');
+                index[jobId] = {
+                    id: jobId,
+                    status: 'archived',
+                    startTime: null,
+                    symbolCount: 0,
+                    isArchived: true,
+                    updatedAt: Date.now()
+                };
+            }
+        }
+        
+        // Save index to user directory
+        const indexPath = path.join(userDir, 'index.json');
+        fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
+        
+        return Object.keys(index).length;
+    } catch (e) {
+        console.error(`Error rebuilding index for ${sessionHash}:`, e);
+        return 0;
+    }
+}
+
+// Rebuild all user indexes (run on startup)
+function rebuildAllIndexes() {
+    console.log('🔄 Rebuilding user indexes...');
+    let totalEntries = 0;
+    
+    try {
+        const entries = fs.readdirSync(RESULTS_DIR);
+        
+        for (const entry of entries) {
+            const entryPath = path.join(RESULTS_DIR, entry);
+            const stat = fs.statSync(entryPath);
+            
+            if (stat.isDirectory()) {
+                const count = rebuildUserIndex(entryPath, entry);
+                if (count > 0) {
+                    console.log(`   📁 ${entry}: ${count} job(s)`);
+                    totalEntries += count;
+                }
+            }
+        }
+        
+        console.log(`✅ Rebuilt indexes for ${totalEntries} total jobs`);
+    } catch (e) {
+        console.error('Error rebuilding indexes:', e);
+    }
+}
+
+// Migrate old results first, then rebuild indexes
+migrateOldResults();
+rebuildAllIndexes();
+
+// Helper: Save job to disk (now saves to user directory)
 function saveJob(jobId) {
     const job = jobs.get(jobId);
     if (!job) return;
 
-    const filePath = path.join(RESULTS_DIR, `${jobId}.json`);
+    const session = job.session || null;
+    const userDir = getUserDir(session);
+    const filePath = path.join(userDir, `${jobId}.json`);
+    
     // Save a copy of the job object
     const jobData = JSON.stringify(job, null, 2);
 
     fs.writeFile(filePath, jobData, (err) => {
-        if (err) console.error(`Failed to save job ${jobId}:`, err);
+        if (err) {
+            console.error(`Failed to save job ${jobId}:`, err);
+            return;
+        }
+        
+        // Update the user's index with job metadata
+        updateJobIndex(session, jobId, {
+            id: job.id || jobId,
+            status: job.status || 'unknown',
+            startTime: job.startTime || null,
+            symbolCount: job.results?.length || 0,
+            indicatorId: job.config?.indicatorId || null,
+            symbols: job.config?.symbols || [],
+            isArchived: false
+        });
     });
 }
 
-// Helper: Compress old results
+// Helper: Compress old results (now processes user directories)
 function compressOldResults() {
     const retentionDays = parseInt(process.env.RETENTION_DAYS || '15');
     const now = Date.now();
     const msPerDay = 24 * 60 * 60 * 1000;
 
-    fs.readdir(RESULTS_DIR, (err, files) => {
+    // Process each user directory
+    fs.readdir(RESULTS_DIR, (err, entries) => {
         if (err) return console.error('Error reading results dir for cleanup:', err);
 
-        files.forEach(file => {
-            if (!file.endsWith('.json')) return; // Only compress .json files
-
-            const filePath = path.join(RESULTS_DIR, file);
-            fs.stat(filePath, (err, stats) => {
-                if (err) return;
-
-                const ageDays = (now - stats.mtimeMs) / msPerDay;
-                if (ageDays > retentionDays) {
-                    console.log(`Compressing old result: ${file} (${ageDays.toFixed(1)} days old)`);
-
-                    const gzip = zlib.createGzip();
-                    const source = fs.createReadStream(filePath);
-                    const destination = fs.createWriteStream(`${filePath}.gz`);
-
-                    source.pipe(gzip).pipe(destination).on('finish', () => {
-                        // Delete original file after successful compression
-                        fs.unlink(filePath, (err) => {
-                            if (err) console.error(`Error deleting ${file} after compression:`, err);
-                            else console.log(`Compressed and deleted ${file}`);
+        entries.forEach(entry => {
+            const entryPath = path.join(RESULTS_DIR, entry);
+            
+            fs.stat(entryPath, (err, stats) => {
+                if (err || !stats.isDirectory()) return;
+                
+                // Process files in user directory
+                fs.readdir(entryPath, (err, files) => {
+                    if (err) return;
+                    
+                    files.forEach(file => {
+                        if (!file.endsWith('.json') || file === 'index.json') return;
+                        
+                        const filePath = path.join(entryPath, file);
+                        fs.stat(filePath, (err, fileStats) => {
+                            if (err) return;
+                            
+                            const ageDays = (now - fileStats.mtimeMs) / msPerDay;
+                            if (ageDays > retentionDays) {
+                                console.log(`Compressing old result: ${entry}/${file} (${ageDays.toFixed(1)} days old)`);
+                                
+                                const gzip = zlib.createGzip();
+                                const source = fs.createReadStream(filePath);
+                                const destination = fs.createWriteStream(`${filePath}.gz`);
+                                
+                                source.pipe(gzip).pipe(destination).on('finish', () => {
+                                    fs.unlink(filePath, (err) => {
+                                        if (err) console.error(`Error deleting ${file} after compression:`, err);
+                                        else {
+                                            console.log(`Compressed and deleted ${entry}/${file}`);
+                                            // Update index to mark as archived
+                                            // Note: We'd need to read the job to get session, but for archived files
+                                            // we just mark them in the current user's index
+                                        }
+                                    });
+                                }).on('error', (err) => {
+                                    console.error(`Error compressing ${file}:`, err);
+                                });
+                            }
                         });
-                    }).on('error', (err) => {
-                        console.error(`Error compressing ${file}:`, err);
                     });
-                }
+                });
             });
         });
     });
@@ -737,63 +993,25 @@ app.post('/api/backtest/:jobId/cancel', (req, res) => {
     res.json({ success: true, message: 'Job cancelled' });
 });
 
-// API: List Jobs
+// API: List Jobs (optimized - uses user-specific index)
 app.get('/api/jobs', (req, res) => {
     try {
-        const files = fs.readdirSync(RESULTS_DIR);
         const currentSession = req.headers['x-session-id'];
         console.log(`🔍 /api/jobs: Requesting history. Session: ${currentSession ? currentSession.substring(0, 10) + '...' : 'NONE'}`);
 
-        const jobSummaries = files
-            .filter(f => f.endsWith('.json') || f.endsWith('.json.gz'))
-            .map(f => {
-                try {
-                    const filePath = path.join(RESULTS_DIR, f);
-                    const stats = fs.statSync(filePath);
-
-                    if (f.endsWith('.json.gz')) {
-                        // For archived files, we can't easily check session without unzipping.
-                        // For now, we'll exclude them if a session is provided to be safe,
-                        // or include them if we assume they are old and public?
-                        // The requirement says "n'affiche que les results de la personne concerné".
-                        // Safest is to exclude if we can't verify.
-                        // Or maybe we should just return them and let client decide?
-                        // But client logic is "if session matches".
-                        // Let's skip archived for now if we are filtering.
-                        if (currentSession) return null;
-
-                        return {
-                            id: f.replace('.json.gz', ''),
-                            date: stats.mtime,
-                            status: 'archived',
-                            symbolCount: '?',
-                            isArchived: true
-                        };
-                    }
-
-                    const content = fs.readFileSync(filePath, 'utf8');
-                    const job = JSON.parse(content);
-
-                    // Filter by session
-                    // Enforce strict filtering: only show jobs that match the current session.
-                    // If user has a session, they see only their jobs.
-                    // If user has NO session (guest), they see only guest jobs (no session).
-                    // This hides legacy/guest jobs from authenticated users, and vice versa.
-                    if (job.session !== currentSession) return null;
-
-                    return {
-                        id: job.id,
-                        date: new Date(job.startTime),
-                        status: job.status,
-                        symbolCount: job.results ? job.results.length : 0,
-                        isArchived: false
-                    };
-                } catch (e) {
-                    console.error(`Error reading job file ${f}:`, e);
-                    return null;
-                }
-            })
-            .filter(j => j !== null)
+        // Load from user-specific index (instant, no file reading)
+        const index = loadJobIndex(currentSession);
+        
+        const jobSummaries = Object.values(index)
+            .map(job => ({
+                id: job.id,
+                date: job.startTime ? new Date(job.startTime) : new Date(job.updatedAt),
+                status: job.status,
+                symbolCount: job.symbolCount || 0,
+                indicatorId: job.indicatorId,
+                symbols: job.symbols,
+                isArchived: job.isArchived || false
+            }))
             .sort((a, b) => b.date - a.date); // Newest first
 
         res.json(jobSummaries);
@@ -803,24 +1021,26 @@ app.get('/api/jobs', (req, res) => {
     }
 });
 
-// API: Get Job Details
+// API: Get Job Details (searches in user directory based on session)
 app.get('/api/jobs/:id', (req, res) => {
     const { id } = req.params;
+    // Support both header and query param
+    const currentSession = req.headers['x-session-id'] || req.query.session;
 
     // Check memory first
     if (jobs.has(id)) {
         return res.json(jobs.get(id));
     }
 
-    // Check disk
-    const jsonPath = path.join(RESULTS_DIR, `${id}.json`);
-    const gzPath = path.join(RESULTS_DIR, `${id}.json.gz`);
+    // Check user's directory on disk
+    const userDir = getUserDir(currentSession);
+    const jsonPath = path.join(userDir, `${id}.json`);
+    const gzPath = path.join(userDir, `${id}.json.gz`);
 
     if (fs.existsSync(jsonPath)) {
         try {
             const content = fs.readFileSync(jsonPath, 'utf8');
             const job = JSON.parse(content);
-            // Cache in memory? Maybe not, to avoid memory leaks.
             res.json(job);
         } catch (e) {
             res.status(500).json({ error: 'Failed to read job file' });
@@ -842,6 +1062,103 @@ app.get('/api/jobs/:id', (req, res) => {
         }
     } else {
         res.status(404).json({ error: 'Job not found' });
+    }
+});
+
+// API: Stream Job Details (Server-Sent Events for progressive loading)
+app.get('/api/jobs/:id/stream', (req, res) => {
+    const { id } = req.params;
+    // Support both header and query param (EventSource doesn't support custom headers)
+    const currentSession = req.headers['x-session-id'] || req.query.session;
+    
+    // Set up SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const sendEvent = (event, data) => {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const loadAndStreamJob = async (job) => {
+        // Send job metadata first (without results)
+        const metadata = {
+            id: job.id,
+            status: job.status,
+            config: job.config,
+            startTime: job.startTime,
+            session: job.session,
+            totalResults: job.results?.length || 0
+        };
+        sendEvent('metadata', metadata);
+
+        // Stream results in batches
+        if (job.results && job.results.length > 0) {
+            const BATCH_SIZE = 50;
+            for (let i = 0; i < job.results.length; i += BATCH_SIZE) {
+                const batch = job.results.slice(i, i + BATCH_SIZE);
+                sendEvent('results', { 
+                    batch, 
+                    progress: Math.min(i + BATCH_SIZE, job.results.length),
+                    total: job.results.length 
+                });
+                
+                // Small delay to allow UI to update
+                await new Promise(resolve => setImmediate(resolve));
+            }
+        }
+
+        // Send completion event
+        sendEvent('complete', { success: true });
+        res.end();
+    };
+
+    // Check memory first
+    if (jobs.has(id)) {
+        loadAndStreamJob(jobs.get(id));
+        return;
+    }
+
+    // Check user's directory on disk
+    const userDir = getUserDir(currentSession);
+    const jsonPath = path.join(userDir, `${id}.json`);
+    const gzPath = path.join(userDir, `${id}.json.gz`);
+
+    if (fs.existsSync(jsonPath)) {
+        try {
+            const content = fs.readFileSync(jsonPath, 'utf8');
+            const job = JSON.parse(content);
+            loadAndStreamJob(job);
+        } catch (e) {
+            sendEvent('error', { message: 'Failed to read job file' });
+            res.end();
+        }
+    } else if (fs.existsSync(gzPath)) {
+        try {
+            const gzContent = fs.readFileSync(gzPath);
+            zlib.gunzip(gzContent, (err, buffer) => {
+                if (err) {
+                    sendEvent('error', { message: 'Failed to decompress job file' });
+                    res.end();
+                    return;
+                }
+                try {
+                    const job = JSON.parse(buffer.toString());
+                    loadAndStreamJob(job);
+                } catch (e) {
+                    sendEvent('error', { message: 'Failed to parse decompressed job file' });
+                    res.end();
+                }
+            });
+        } catch (e) {
+            sendEvent('error', { message: 'Failed to read compressed job file' });
+            res.end();
+        }
+    } else {
+        sendEvent('error', { message: 'Job not found' });
+        res.end();
     }
 });
 

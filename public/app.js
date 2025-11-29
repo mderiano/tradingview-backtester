@@ -353,33 +353,235 @@ function renderHistory(jobs) {
         const row = document.createElement('tr');
         const date = new Date(job.date).toLocaleString();
         const statusClass = `status-${job.status}`;
+        
+        // Show symbols preview (first 3 + count)
+        let symbolsDisplay = '-';
+        if (job.symbols && job.symbols.length > 0) {
+            const preview = job.symbols.slice(0, 3).join(', ');
+            const remaining = job.symbols.length > 3 ? ` +${job.symbols.length - 3}` : '';
+            symbolsDisplay = `${preview}${remaining}`;
+        }
 
         row.innerHTML = `
             <td>${date}</td>
             <td><span class="status-badge ${statusClass}">${job.status}</span></td>
-            <td>${job.symbolCount || '?'} symbols</td>
-            <td>${job.isArchived ? 'Archived' : 'Available'}</td>
+            <td title="${job.symbols?.join(', ') || ''}">${symbolsDisplay}</td>
+            <td>${job.symbolCount || 0}</td>
             <td>
-                <button class="btn small primary" onclick="loadJob('${job.id}')">Load</button>
+                <button class="btn small primary load-job-btn" data-job-id="${job.id}">Load</button>
             </td>
         `;
+        
+        // Add click handler to the button
+        const loadBtn = row.querySelector('.load-job-btn');
+        loadBtn.addEventListener('click', () => handleLoadJob(job.id, loadBtn));
+        
         historyTableBody.appendChild(row);
     });
 }
 
-window.loadJob = async (jobId) => {
+// Handle load job with streaming for progressive loading
+async function handleLoadJob(jobId, button) {
     try {
-        historyModal.classList.add('hidden');
+        // Add loading state to button
+        button.classList.add('loading');
+        button.disabled = true;
+        
+        // Show loading message
         statusMessage.textContent = 'Loading job...';
-
-        const res = await fetch(`/api/jobs/${jobId}`);
-        if (!res.ok) throw new Error('Failed to load job');
-
-        const job = await res.json();
-        restoreJob(job);
+        statusMessage.className = 'status-message info';
+        
+        // Close modal immediately to show results as they stream in
+        historyModal.classList.add('hidden');
+        
+        // Use streaming endpoint
+        await loadJobWithStreaming(jobId);
+        
+        // Remove loading state
+        button.classList.remove('loading');
+        button.disabled = false;
 
     } catch (e) {
+        // Remove loading state
+        button.classList.remove('loading');
+        button.disabled = false;
+        
         alert('Error loading job: ' + e.message);
+    }
+}
+
+// Load job with Server-Sent Events for progressive rendering
+async function loadJobWithStreaming(jobId) {
+    return new Promise((resolve, reject) => {
+        // EventSource doesn't support custom headers, so pass session as query param
+        const syncData = getSyncData();
+        const sessionParam = syncData?.session ? `?session=${encodeURIComponent(syncData.session)}` : '';
+        const eventSource = new EventSource(`/api/jobs/${jobId}/stream${sessionParam}`);
+        let jobMetadata = null;
+        let allResults = [];
+        
+        eventSource.addEventListener('metadata', (event) => {
+            try {
+                jobMetadata = JSON.parse(event.data);
+                
+                // Initialize UI with metadata
+                state.currentJobId = jobMetadata.id;
+                state.results = [];
+                
+                // Restore config if available
+                if (jobMetadata.config) {
+                    restoreJobConfig(jobMetadata.config);
+                }
+                
+                // Show step 3 and clear results table
+                step3.classList.remove('hidden');
+                historyBtn.classList.remove('hidden');
+                resultsTableBody.innerHTML = '';
+                
+                // Show progress
+                if (jobMetadata.totalResults > 0) {
+                    statusMessage.textContent = `Loading results: 0/${jobMetadata.totalResults}...`;
+                } else {
+                    statusMessage.textContent = 'Job loaded (no results)';
+                }
+            } catch (e) {
+                console.error('Error parsing metadata:', e);
+            }
+        });
+        
+        eventSource.addEventListener('results', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                
+                // Add results progressively
+                data.batch.forEach(result => {
+                    state.results.push(result);
+                    allResults.push(result);
+                    addResultRow(result);
+                });
+                
+                // Update progress
+                statusMessage.textContent = `Loading results: ${data.progress}/${data.total}...`;
+            } catch (e) {
+                console.error('Error parsing results:', e);
+            }
+        });
+        
+        eventSource.addEventListener('complete', (event) => {
+            eventSource.close();
+            
+            // Final status update
+            if (jobMetadata) {
+                const dateStr = jobMetadata.startTime 
+                    ? new Date(jobMetadata.startTime).toLocaleString() 
+                    : 'unknown date';
+                statusMessage.textContent = `Loaded job from ${dateStr} (${allResults.length} results)`;
+                
+                if (jobMetadata.status === 'completed') {
+                    statusMessage.style.color = '#4CAF50';
+                } else if (jobMetadata.status === 'failed') {
+                    statusMessage.style.color = '#ff4444';
+                }
+            }
+            
+            // Save ID to local storage
+            localStorage.setItem('currentJobId', jobId);
+            resetButtons();
+            
+            resolve();
+        });
+        
+        eventSource.addEventListener('error', (event) => {
+            eventSource.close();
+            
+            try {
+                const data = JSON.parse(event.data);
+                reject(new Error(data.message || 'Failed to load job'));
+            } catch (e) {
+                reject(new Error('Failed to load job'));
+            }
+        });
+        
+        // Handle connection errors
+        eventSource.onerror = () => {
+            eventSource.close();
+            reject(new Error('Connection lost while loading job'));
+        };
+    });
+}
+
+// Helper function to restore job config (extracted from restoreJob)
+function restoreJobConfig(cfg) {
+    // Restore Indicator ID
+    if (cfg.indicatorId) {
+        state.indicatorId = cfg.indicatorId;
+        step2.classList.remove('hidden');
+    }
+
+    // Restore Symbols
+    if (cfg.symbols && Array.isArray(cfg.symbols)) {
+        state.symbols = cfg.symbols;
+        renderSymbols();
+    }
+
+    // Restore Timeframes
+    if (cfg.timeframes) {
+        document.querySelectorAll('input[name="timeframe"]').forEach(cb => {
+            cb.checked = cfg.timeframes.includes(cb.value);
+        });
+    }
+
+    // Restore Dates
+    if (cfg.dateFrom) dateFromInput.value = cfg.dateFrom;
+    if (cfg.dateTo) dateToInput.value = cfg.dateTo;
+
+    // Restore Options & Ranges
+    if (cfg.indicatorId) {
+        const syncData = getSyncData();
+        if (syncData && syncData.indicators) {
+            const indicator = syncData.indicators.find(ind => ind.id === cfg.indicatorId);
+
+            if (indicator && indicator.inputs) {
+                window.currentIndicatorObj = indicator;
+                state.indicatorId = indicator.id;
+
+                window.savedOptionsAndRanges = {
+                    indicatorId: cfg.indicatorId,
+                    options: cfg.options,
+                    ranges: cfg.ranges
+                };
+
+                renderOptions(indicator);
+
+                state.options = cfg.options || {};
+                state.ranges = cfg.ranges || {};
+
+                updateBacktestSummary();
+            }
+        }
+    }
+    
+    // Check if we have saved settings to show the button
+    const savedSettings = getSettings();
+    if (savedSettings && savedSettings.indicatorId === state.indicatorId) {
+        reloadPreviousSettingsBtn.classList.remove('hidden');
+    }
+}
+
+window.loadJob = async (jobId) => {
+    // Legacy function for backwards compatibility
+    const button = document.querySelector(`[data-job-id="${jobId}"]`);
+    if (button) {
+        handleLoadJob(jobId, button);
+    } else {
+        // Fallback if button not found - use streaming anyway
+        try {
+            historyModal.classList.add('hidden');
+            statusMessage.textContent = 'Loading job...';
+            await loadJobWithStreaming(jobId);
+        } catch (e) {
+            alert('Error loading job: ' + e.message);
+        }
     }
 };
 
