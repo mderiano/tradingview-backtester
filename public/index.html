@@ -20,17 +20,23 @@
     </div>
     <div class="container">
         <header>
-            <h1 id="appTitle">TradingView Backtester</h1>
-            <p id="appSubtitle">Automated strategy testing with range analysis</p>
+            <h1 id="appTitle" data-i18n="header.title">TradingView Backtester</h1>
+            <p id="appSubtitle" data-i18n="header.subtitle">Automated strategy testing with range analysis</p>
             <div class="header-actions">
-                <button id="historyBtn" class="btn secondary history-btn hidden">📜 History</button>
+                <div class="language-selector">
+                    <button id="langToggle" class="btn secondary small lang-btn" title="Change language / Changer de langue">
+                        <span class="lang-flag">🌐</span>
+                        <span class="lang-text" id="currentLangText">EN</span>
+                    </button>
+                </div>
+                <button id="historyBtn" class="btn secondary history-btn hidden" data-i18n="buttons.history">📜 History</button>
             </div>
         </header>
 
         <main>
             <!-- Step 1: Indicator Selection -->
             <section class="card" id="step1">
-                <h2>Select Indicator</h2>
+                <h2 data-i18n="step1.title">Select Indicator</h2>
                 <!-- Discovered Indicators Container -->
                 <div id="discoveredContainer" class="discovered-container hidden"></div>
             </section>
@@ -38,24 +44,24 @@
             <!-- Step 2: Configuration -->
             <section class="card hidden" id="step2">
                 <div class="section-header">
-                    <h2>Configure Strategy</h2>
+                    <h2 data-i18n="step2.title">Configure Strategy</h2>
                 </div>
 
                 <!-- Symbols Section -->
                 <div class="input-group">
-                    <label>Symbols</label>
+                    <label data-i18n="step2.symbolsLabel">Symbols</label>
                     <div class="symbols-container" id="symbolsContainer">
                         <!-- Chips injected here -->
                         <div class="add-symbol-wrapper">
-                            <input type="text" id="newSymbolInput" placeholder="Add symbol..." class="add-symbol-input">
-                            <button id="addSymbolBtn" class="btn-icon" title="Add Symbol">+</button>
+                            <input type="text" id="newSymbolInput" data-i18n-placeholder="placeholders.addSymbol" placeholder="Add symbol..." class="add-symbol-input">
+                            <button id="addSymbolBtn" class="btn-icon" data-i18n-title="tooltips.addSymbol" title="Add Symbol">+</button>
                         </div>
                     </div>
                 </div>
 
                 <!-- Timeframes Section -->
                 <div class="input-group">
-                    <label>Timeframes</label>
+                    <label data-i18n="step2.timeframesLabel">Timeframes</label>
                     <div class="timeframe-grid">
                         <label class="checkbox-label"><input type="checkbox" name="timeframe" value="1">
                             1m</label>
@@ -88,15 +94,15 @@
 
                 <!-- Date Range Section -->
                 <div class="input-group">
-                    <label>Backtest Date Range</label>
+                    <label data-i18n="step2.dateRangeLabel">Backtest Date Range</label>
                     <div class="date-range-container">
                         <div class="date-input-wrapper">
-                            <label for="dateFrom" class="date-label">From</label>
+                            <label for="dateFrom" class="date-label" data-i18n="step2.dateFrom">From</label>
                             <input type="date" id="dateFrom" class="date-input">
                         </div>
                         <div class="date-separator">—</div>
                         <div class="date-input-wrapper">
-                            <label for="dateTo" class="date-label">To</label>
+                            <label for="dateTo" class="date-label" data-i18n="step2.dateTo">To</label>
                             <input type="date" id="dateTo" class="date-input">
                         </div>
                     </div>
@@ -104,7 +110,7 @@
 
                 <hr class="divider">
 
-                <h3>Indicator Options</h3>
+                <h3 data-i18n="step2.indicatorOptions">Indicator Options</h3>
                 <!-- Options List -->
                 <div id="optionsContainer" class="options-list">
                     <!-- Dynamic options injected here -->
@@ -114,7 +120,7 @@
                 <div id="backtestSummary" class="backtest-summary">
                     <div class="summary-icon">📊</div>
                     <div class="summary-content">
-                        <div class="summary-label">Total Backtests to Run:</div>
+                        <div class="summary-label" data-i18n="step2.backtestSummary">Total Backtests to Run:</div>
                         <div class="summary-breakdown" id="backtestBreakdown">
                             <span id="totalBacktests" class="total-count">0</span>
                             <span class="breakdown-details" id="breakdownDetails"></span>
@@ -123,7 +129,7 @@
                     <div id="accountBadge" class="account-badge hidden">
                         <span class="badge-icon">👤</span>
                         <span class="badge-plan">-</span>
-                        <span class="badge-connections">(<input type="number" id="parallelInput" min="1" max="50" value="1" title="Nombre de backtests en parallèle"> parallel)</span>
+                        <span class="badge-connections">(<input type="number" id="parallelInput" min="1" max="50" value="1" data-i18n-title="tooltips.parallelConnections" title="Number of backtests in parallel"> <span data-i18n="step2.parallel">parallel</span>)</span>
                         <span class="badge-hint" id="badgeHint"></span>
                     </div>
                 </div>
@@ -132,7 +138,7 @@
                 <div id="periodWarning" class="period-warning hidden">
                     <div class="warning-icon">⚠️</div>
                     <div class="warning-content">
-                        <div class="warning-title">Long Period Warning</div>
+                        <div class="warning-title" data-i18n="step2.longPeriodWarning">Long Period Warning</div>
                         <div class="warning-message" id="periodWarningMessage">-</div>
                     </div>
                 </div>
@@ -140,28 +146,28 @@
                 <!-- Settings Toolbar -->
                 <div class="settings-toolbar" style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-bottom: 0.5rem; padding: 0.5rem; background: rgba(255, 255, 255, 0.02); border-radius: 8px;">
                     <button id="reloadPreviousSettingsBtn" class="btn secondary small hidden"
-                        title="Reload previous settings for this indicator">🔄 Reload</button>
-                    <button id="exportSettingsBtn" class="btn secondary small" title="Export current settings to JSON file">
+                        data-i18n="buttons.reload" data-i18n-title="tooltips.reloadSettings" title="Reload previous settings for this indicator">🔄 Reload</button>
+                    <button id="exportSettingsBtn" class="btn secondary small" data-i18n="buttons.export" data-i18n-title="tooltips.exportSettings" title="Export current settings to JSON file">
                         📥 Export
                     </button>
-                    <button id="importSettingsBtn" class="btn secondary small" title="Import settings from JSON file">
+                    <button id="importSettingsBtn" class="btn secondary small" data-i18n="buttons.import" data-i18n-title="tooltips.importSettings" title="Import settings from JSON file">
                         📤 Import
                     </button>
                     <input type="file" id="importSettingsFile" accept=".json" style="display: none;">
-                    <button id="clearSettingsBtn" class="btn secondary small"
-                        title="Clear all saved settings from localStorage">🗑️ Clear</button>
+                    <button id="clearSettingsBtn" class="btn secondary small" data-i18n="buttons.clear"
+                        data-i18n-title="tooltips.clearSettings" title="Clear all saved settings from localStorage">🗑️ Clear</button>
                 </div>
 
                 <!-- Main Actions -->
                 <div class="actions">
-                    <button id="runBacktestBtn" class="btn primary large">Run Backtest</button>
-                    <button id="stopBacktestBtn" class="btn secondary large hidden">Stop Backtest</button>
+                    <button id="runBacktestBtn" class="btn primary large" data-i18n="buttons.runBacktest">Run Backtest</button>
+                    <button id="stopBacktestBtn" class="btn secondary large hidden" data-i18n="buttons.stopBacktest">Stop Backtest</button>
                 </div>
             </section>
 
             <!-- Step 3: Results -->
             <section class="card hidden" id="step3">
-                <h2>Results</h2>
+                <h2 data-i18n="step3.title">Results</h2>
 
                 <!-- Progress Bar -->
                 <div id="progressBarContainer" class="progress-bar-container hidden">
@@ -178,10 +184,10 @@
 
                 <!-- Results Export Controls -->
                 <div class="results-actions" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                    <div class="table-hint">💡 Click any row to view detailed analytics</div>
+                    <div class="table-hint" data-i18n="step3.tableHint">💡 Click any row to view detailed analytics</div>
                     <div class="results-io-group" style="display: flex; gap: 0.5rem;">
-                        <button id="exportResultsJSONBtn" class="btn secondary small">📥 Export JSON</button>
-                        <button id="exportResultsExcelBtn" class="btn secondary small">📥 Export Excel</button>
+                        <button id="exportResultsJSONBtn" class="btn secondary small" data-i18n="buttons.exportJSON">📥 Export JSON</button>
+                        <button id="exportResultsExcelBtn" class="btn secondary small" data-i18n="buttons.exportExcel">📥 Export Excel</button>
                     </div>
                 </div>
 
@@ -189,15 +195,15 @@
                     <table id="resultsTable">
                         <thead>
                             <tr>
-                                <th>Symbol</th>
-                                <th>TF</th>
-                                <th>Options</th>
-                                <th>Net Profit</th>
-                                <th>Trades</th>
-                                <th>% Win</th>
-                                <th>PF</th>
-                                <th>DD</th>
-                                <th>Avg Trade</th>
+                                <th data-i18n="table.symbol">Symbol</th>
+                                <th data-i18n="table.timeframe">TF</th>
+                                <th data-i18n="table.options">Options</th>
+                                <th data-i18n="table.netProfit">Net Profit</th>
+                                <th data-i18n="table.trades">Trades</th>
+                                <th data-i18n="table.percentWin">% Win</th>
+                                <th data-i18n="table.profitFactor">PF</th>
+                                <th data-i18n="table.drawdown">DD</th>
+                                <th data-i18n="table.avgTrade">Avg Trade</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -213,41 +219,41 @@
     <div id="analyticsModal" class="modal hidden">
         <div class="modal-content">
             <div class="modal-header">
-                <h2 id="modalTitle">Strategy Analytics</h2>
+                <h2 id="modalTitle" data-i18n="modal.analyticsTitle">Strategy Analytics</h2>
                 <button class="close-btn" id="closeModalBtn">&times;</button>
             </div>
 
             <div class="tabs">
-                <button class="tab-btn active" data-tab="overview">Overview</button>
-                <button class="tab-btn" data-tab="performance">Performance Summary</button>
-                <button class="tab-btn" data-tab="trades">List of Trades</button>
+                <button class="tab-btn active" data-tab="overview" data-i18n="modal.tabs.overview">Overview</button>
+                <button class="tab-btn" data-tab="performance" data-i18n="modal.tabs.performance">Performance Summary</button>
+                <button class="tab-btn" data-tab="trades" data-i18n="modal.tabs.trades">List of Trades</button>
             </div>
 
             <div class="tab-content">
                 <div id="overview-tab" class="tab-pane active">
                     <div class="metrics-grid">
                         <div class="metric-card">
-                            <div class="metric-label">Net Profit</div>
+                            <div class="metric-label" data-i18n="metrics.netProfit">Net Profit</div>
                             <div class="metric-value" id="modal-netProfit">-</div>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-label">Total Trades</div>
+                            <div class="metric-label" data-i18n="metrics.totalTrades">Total Trades</div>
                             <div class="metric-value" id="modal-totalTrades">-</div>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-label">% Profitable</div>
+                            <div class="metric-label" data-i18n="metrics.percentProfitable">% Profitable</div>
                             <div class="metric-value" id="modal-percentProfitable">-</div>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-label">Profit Factor</div>
+                            <div class="metric-label" data-i18n="metrics.profitFactor">Profit Factor</div>
                             <div class="metric-value" id="modal-profitFactor">-</div>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-label">Max Drawdown</div>
+                            <div class="metric-label" data-i18n="metrics.maxDrawdown">Max Drawdown</div>
                             <div class="metric-value" id="modal-maxDrawdown">-</div>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-label">Sharpe Ratio</div>
+                            <div class="metric-label" data-i18n="metrics.sharpeRatio">Sharpe Ratio</div>
                             <div class="metric-value" id="modal-sharpeRatio">-</div>
                         </div>
                     </div>
@@ -265,15 +271,15 @@
                         <table class="trades-table">
                             <thead>
                                 <tr>
-                                    <th>#</th>
-                                    <th>Type</th>
-                                    <th>Entry Date/Time</th>
-                                    <th>Entry</th>
-                                    <th>Exit Date/Time</th>
-                                    <th>Exit</th>
-                                    <th>Profit</th>
-                                    <th>Profit %</th>
-                                    <th>Cumulative</th>
+                                    <th data-i18n="table.number">#</th>
+                                    <th data-i18n="table.type">Type</th>
+                                    <th data-i18n="table.entryDateTime">Entry Date/Time</th>
+                                    <th data-i18n="table.entry">Entry</th>
+                                    <th data-i18n="table.exitDateTime">Exit Date/Time</th>
+                                    <th data-i18n="table.exit">Exit</th>
+                                    <th data-i18n="table.profit">Profit</th>
+                                    <th data-i18n="table.profitPercent">Profit %</th>
+                                    <th data-i18n="table.cumulative">Cumulative</th>
                                 </tr>
                             </thead>
                             <tbody id="tradesTableBody"></tbody>
@@ -288,9 +294,9 @@
     <div id="historyModal" class="modal hidden">
         <div class="modal-content history-modal-content">
             <div class="modal-header">
-                <h2>Backtest History</h2>
+                <h2 data-i18n="modal.historyTitle">Backtest History</h2>
                 <div style="display: flex; gap: 0.5rem; align-items: center;">
-                    <button id="importResultsBtn" class="btn secondary small">📤 Import Results</button>
+                    <button id="importResultsBtn" class="btn secondary small" data-i18n="buttons.importResults">📤 Import Results</button>
                     <input type="file" id="importResultsFile" accept=".json" style="display: none;">
                     <button class="close-btn" id="closeHistoryBtn">&times;</button>
                 </div>
@@ -299,11 +305,11 @@
                 <table class="history-table">
                     <thead>
                         <tr>
-                            <th>Date</th>
-                            <th>Status</th>
-                            <th>Symbols</th>
-                            <th>Results</th>
-                            <th>Actions</th>
+                            <th data-i18n="table.date">Date</th>
+                            <th data-i18n="table.status">Status</th>
+                            <th data-i18n="table.symbols">Symbols</th>
+                            <th data-i18n="table.results">Results</th>
+                            <th data-i18n="table.actions">Actions</th>
                         </tr>
                     </thead>
                     <tbody id="historyTableBody">
@@ -314,6 +320,7 @@
         </div>
     </div>
 
+    <script src="i18n.js"></script>
     <script src="sync-bridge.js"></script>
     <script src="app.js"></script>
 </body>

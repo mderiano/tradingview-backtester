@@ -1,8 +1,9 @@
 {
     "manifest_version": 3,
-    "name": "TradingView Backtest",
+    "name": "__MSG_extensionName__",
     "version": "1.0.3",
-    "description": "Extracts TradingView session and active indicators for local backtesting.",
+    "description": "__MSG_extensionDescription__",
+    "default_locale": "en",
     "permissions": [
         "activeTab",
         "scripting",

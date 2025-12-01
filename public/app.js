@@ -106,7 +106,7 @@ function updateAccountBadge(accountType) {
         parallelInput.max = Math.max(50, recommended * 3); // Allow up to 3x recommended or 50
     }
     if (badgeHint) {
-        badgeHint.textContent = `(recommandé: ${recommended})`;
+        badgeHint.textContent = i18n.t('tooltips.recommended', { recommended });
     }
     
     badge.classList.remove('hidden');
@@ -147,7 +147,7 @@ function showRateLimitWarning() {
     
     // Update status with helpful message
     updateStatus(
-        `⚠️ Erreur 429 - TradingView limite les connexions. Réduisez le nombre de backtests parallèles (recommandé: ${recommended} pour ${accountType}).`,
+        i18n.t('errors.rateLimitWarning', { recommended, accountType }),
         'error'
     );
 }
@@ -201,6 +201,22 @@ function initializeDateInputs() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+    // Initialize i18n FIRST
+    await i18n.init();
+    i18n.updateDOM();
+
+    // Initialize language selector
+    const langToggle = document.getElementById('langToggle');
+    const currentLangText = document.getElementById('currentLangText');
+    if (langToggle && currentLangText) {
+        currentLangText.textContent = i18n.getCurrentLanguage().toUpperCase();
+        langToggle.addEventListener('click', () => {
+            const newLang = i18n.getCurrentLanguage() === 'en' ? 'fr' : 'en';
+            i18n.setLanguage(newLang);
+            currentLangText.textContent = newLang.toUpperCase();
+        });
+    }
+
     initializeDateInputs();
     loadSettings();
 
@@ -303,7 +319,7 @@ function autoLoadFromSync(syncData) {
                 console.log('🔄 Auto-loading previous indicator with saved settings:', savedIndicator.name);
                 // Use loadIndicatorWithLocalValues to restore all saved settings
                 loadIndicatorWithLocalValues(savedIndicator);
-                updateStatus(`🔄 Restored previous settings for ${savedIndicator.name}`, 'success');
+                updateStatus(i18n.t('messages.restoredSettings', { indicator: savedIndicator.name }), 'success');
                 setTimeout(() => statusMessage.textContent = '', 3000);
                 return; // Don't show the sync notification since we're restoring
             }
@@ -311,7 +327,7 @@ function autoLoadFromSync(syncData) {
 
         // Show notification only if we didn't auto-load
         if (statusMessage) {
-            updateStatus(`🔄 Synced ${syncData.indicators.length} indicators from TradingView`, 'success');
+            updateStatus(i18n.t('messages.syncedIndicators', { count: syncData.indicators.length }), 'success');
             setTimeout(() => statusMessage.textContent = '', 5000);
         }
     }
@@ -354,7 +370,7 @@ async function openHistoryModal() {
 }
 
 async function fetchHistory() {
-    historyTableBody.innerHTML = '<tr><td colspan="5">Loading...</td></tr>';
+    historyTableBody.innerHTML = `<tr><td colspan="5">${i18n.t('messages.loadingHistory')}</td></tr>`;
     try {
         // Get session from localStorage to filter history
         const headers = {};
@@ -372,14 +388,14 @@ async function fetchHistory() {
         const jobs = await res.json();
         renderHistory(jobs);
     } catch (e) {
-        historyTableBody.innerHTML = `<tr><td colspan="5" class="negative">Error: ${e.message}</td></tr>`;
+        historyTableBody.innerHTML = `<tr><td colspan="5" class="negative">${i18n.t('messages.historyError', { message: e.message })}</td></tr>`;
     }
 }
 
 function renderHistory(jobs) {
     historyTableBody.innerHTML = '';
     if (jobs.length === 0) {
-        historyTableBody.innerHTML = '<tr><td colspan="5">No history found</td></tr>';
+        historyTableBody.innerHTML = `<tr><td colspan="5">${i18n.t('messages.noHistory')}</td></tr>`;
         return;
     }
 
@@ -396,13 +412,15 @@ function renderHistory(jobs) {
             symbolsDisplay = `${preview}${remaining}`;
         }
 
+        const translatedStatus = i18n.t(`status.${job.status}`) || job.status;
+
         row.innerHTML = `
             <td>${date}</td>
-            <td><span class="status-badge ${statusClass}">${job.status}</span></td>
+            <td><span class="status-badge ${statusClass}">${translatedStatus}</span></td>
             <td title="${job.symbols?.join(', ') || ''}">${symbolsDisplay}</td>
             <td>${job.symbolCount || 0}</td>
             <td class="actions-cell">
-                <button class="btn small primary load-job-btn" data-job-id="${job.id}">Load</button>
+                <button class="btn small primary load-job-btn" data-job-id="${job.id}">${i18n.t('buttons.load')}</button>
                 <button class="btn small secondary export-json-btn" data-job-id="${job.id}">📥 JSON</button>
                 <button class="btn small secondary export-excel-btn" data-job-id="${job.id}">📥 Excel</button>
             </td>
@@ -435,7 +453,7 @@ async function handleLoadJob(jobId, button) {
         button.disabled = true;
         
         // Show loading message
-        statusMessage.textContent = 'Loading job...';
+        statusMessage.textContent = i18n.t('messages.loadingJob');
         statusMessage.className = 'status-message info';
         
         // Close modal immediately to show results as they stream in
@@ -453,7 +471,7 @@ async function handleLoadJob(jobId, button) {
         button.classList.remove('loading');
         button.disabled = false;
         
-        alert('Error loading job: ' + e.message);
+        alert(i18n.t('errors.loadingJob', { message: e.message }));
     }
 }
 
@@ -487,9 +505,9 @@ async function loadJobWithStreaming(jobId) {
                 
                 // Show progress
                 if (jobMetadata.totalResults > 0) {
-                    statusMessage.textContent = `Loading results: 0/${jobMetadata.totalResults}...`;
+                    statusMessage.textContent = i18n.t('messages.loadingResults', { progress: 0, total: jobMetadata.totalResults });
                 } else {
-                    statusMessage.textContent = 'Job loaded (no results)';
+                    statusMessage.textContent = i18n.t('messages.jobLoadedNoResults');
                 }
             } catch (e) {
                 console.error('Error parsing metadata:', e);
@@ -508,7 +526,7 @@ async function loadJobWithStreaming(jobId) {
                 });
                 
                 // Update progress
-                statusMessage.textContent = `Loading results: ${data.progress}/${data.total}...`;
+                statusMessage.textContent = i18n.t('messages.loadingResults', { progress: data.progress, total: data.total });
             } catch (e) {
                 console.error('Error parsing results:', e);
             }
@@ -522,7 +540,7 @@ async function loadJobWithStreaming(jobId) {
                 const dateStr = jobMetadata.startTime 
                     ? new Date(jobMetadata.startTime).toLocaleString() 
                     : 'unknown date';
-                statusMessage.textContent = `Loaded job from ${dateStr} (${allResults.length} results)`;
+                statusMessage.textContent = i18n.t('messages.jobLoaded', { date: dateStr, count: allResults.length });
                 
                 if (jobMetadata.status === 'completed') {
                     statusMessage.style.color = '#4CAF50';
@@ -624,10 +642,10 @@ window.loadJob = async (jobId) => {
         // Fallback if button not found - use streaming anyway
         try {
             historyModal.classList.add('hidden');
-            statusMessage.textContent = 'Loading job...';
+            statusMessage.textContent = i18n.t('messages.loadingJob');
             await loadJobWithStreaming(jobId);
         } catch (e) {
-            alert('Error loading job: ' + e.message);
+            alert(i18n.t('errors.loadingJob', { message: e.message }));
         }
     }
 };
@@ -717,15 +735,15 @@ function restoreJob(job) {
 
     // Update status
     if (job.status === 'running' || job.status === 'pending') {
-        statusMessage.textContent = 'Resuming backtest...';
+        statusMessage.textContent = i18n.t('messages.resumingBacktest');
         runBacktestBtn.disabled = true;
-        runBacktestBtn.textContent = 'Running Backtest...';
+        runBacktestBtn.textContent = i18n.t('messages.runningBacktest');
         stopBacktestBtn.classList.remove('hidden');
 
         // Reconnect WebSocket
         connectWebSocket(job.id);
     } else {
-        statusMessage.textContent = `Loaded job from ${new Date(job.startTime).toLocaleString()}`;
+        statusMessage.textContent = i18n.t('messages.jobLoaded', { date: new Date(job.startTime).toLocaleString(), count: state.results.length });
         if (job.status === 'completed') {
             statusMessage.style.color = '#4CAF50';
         } else if (job.status === 'failed') {
@@ -774,7 +792,7 @@ function connectWebSocket(jobId) {
             // A retry completed successfully - update handled by 'result' message
             console.log('✓ Retry completed:', msg.data.symbol, msg.data.timeframe);
         } else if (msg.type === 'complete') {
-            statusMessage.textContent = '✅ Backtest complete!';
+            statusMessage.textContent = '✅ ' + i18n.t('messages.backtestComplete');
             statusMessage.style.color = '#4CAF50';
             resetButtons();
             ws.close();
@@ -783,7 +801,7 @@ function connectWebSocket(jobId) {
             if (msg.message && msg.message.includes('429')) {
                 showRateLimitWarning();
             }
-            statusMessage.textContent = '❌ Error: ' + msg.message;
+            statusMessage.textContent = '❌ ' + i18n.t('errors.generic', { message: msg.message });
             statusMessage.style.color = '#ff4444';
             resetButtons();
             ws.close();
@@ -792,7 +810,7 @@ function connectWebSocket(jobId) {
 
     ws.onerror = (error) => {
         console.error('WebSocket error:', error);
-        statusMessage.textContent = 'Connection error';
+        statusMessage.textContent = i18n.t('errors.connectionError');
     };
 }
 
@@ -809,7 +827,7 @@ async function retryBacktest(row) {
     
     const syncData = getSyncData();
     if (!syncData || !syncData.session) {
-        alert('Session TradingView non disponible. Veuillez synchroniser.');
+        alert(i18n.t('errors.noSession'));
         return;
     }
     
@@ -821,7 +839,7 @@ async function retryBacktest(row) {
         <td>${timeframe}</td>
         <td><small>${formatOptions(options)}</small></td>
         <td colspan="6" class="pending-cell">
-            <span class="running-indicator">🔄 Retrying...</span>
+            <span class="running-indicator">${i18n.t('messages.retrying')}</span>
         </td>
     `;
     
@@ -956,23 +974,23 @@ function generateOptionCombinations(baseOptions, ranges) {
 
 async function runBacktest() {
     if (!state.indicatorId) {
-        alert('Please select an indicator first.');
+        alert(i18n.t('errors.noIndicator'));
         return;
     }
     if (state.symbols.length === 0) {
-        alert('Please add at least one symbol.');
+        alert(i18n.t('errors.noSymbol'));
         return;
     }
 
     const selectedTimeframes = Array.from(document.querySelectorAll('input[name="timeframe"]:checked')).map(cb => cb.value);
     if (selectedTimeframes.length === 0) {
-        alert('Please select at least one timeframe.');
+        alert(i18n.t('errors.noTimeframe'));
         return;
     }
 
-    updateStatus('Starting backtest...', 'info');
+    updateStatus(i18n.t('messages.startingBacktest'), 'info');
     runBacktestBtn.disabled = true;
-    runBacktestBtn.textContent = 'Running Backtest...';
+    runBacktestBtn.textContent = i18n.t('messages.runningBacktest');
     stopBacktestBtn.classList.remove('hidden');
     resultsTableBody.innerHTML = '';
     state.results = []; // Clear previous results
@@ -998,7 +1016,7 @@ async function runBacktest() {
         optionCombinations = generateOptionCombinations(state.options, state.ranges);
         console.log(`Generated ${optionCombinations.length} option combinations`);
     } catch (e) {
-        alert('Error generating combinations: ' + e.message);
+        alert(i18n.t('errors.generateCombinations', { message: e.message }));
         resetButtons();
         return;
     }
@@ -1008,7 +1026,7 @@ async function runBacktest() {
 
     // Warn if too many tests
     if (totalTests > 100) {
-        if (!confirm(`This will run ${totalTests} backtests. Are you sure?`)) {
+        if (!confirm(i18n.t('dialogs.confirmBacktest', { count: totalTests }))) {
             resetButtons();
             return;
         }
@@ -1065,7 +1083,7 @@ async function runBacktest() {
 
     } catch (error) {
         console.error('Backtest error:', error);
-        updateStatus(`❌ Error: ${error.message}`, 'error');
+        updateStatus('❌ ' + i18n.t('errors.generic', { message: error.message }), 'error');
         resetButtons();
     }
 }
@@ -1166,7 +1184,7 @@ function loadIndicatorWithTVValues(indicator) {
 
     // Show status message
     if (statusMessage) {
-        updateStatus(`📊 Loading ${indicator.name} with TradingView values...`, 'success');
+        updateStatus('💾 ' + i18n.t('messages.settingsLoaded', { indicator: indicator.name }), 'success');
         setTimeout(() => statusMessage.textContent = '', 3000);
     }
 
@@ -1227,7 +1245,7 @@ function loadIndicatorWithLocalValues(indicator) {
 
     // Show status message
     if (statusMessage) {
-        updateStatus(`💾 Loading ${indicator.name} with saved values...`, 'success');
+        updateStatus('💾 ' + i18n.t('messages.settingsLoaded', { indicator: indicator.name }), 'success');
         setTimeout(() => statusMessage.textContent = '', 3000);
     }
 
@@ -1350,11 +1368,11 @@ function exportSettings() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        updateStatus(`✅ Settings exported to ${filename}`, 'success');
+        updateStatus('✅ ' + i18n.t('messages.settingsExported', { filename }), 'success');
         setTimeout(() => statusMessage.textContent = '', 3000);
     } catch (error) {
         console.error('Export settings error:', error);
-        updateStatus(`❌ Export failed: ${error.message}`, 'error');
+        updateStatus('❌ ' + i18n.t('errors.exportFailed', { error: error.message }), 'error');
     }
 }
 
@@ -1364,7 +1382,7 @@ async function handleImportSettings(event) {
     if (!file) return;
 
     try {
-        updateStatus('📤 Importing settings...', 'info');
+        updateStatus('📤 ' + i18n.t('messages.importingResults'), 'info');
 
         const text = await file.text();
         const imported = JSON.parse(text);
@@ -1372,12 +1390,12 @@ async function handleImportSettings(event) {
         validateImportedSettings(imported);
 
         applyImportedSettings(imported);
-        updateStatus('✅ Settings imported successfully!', 'success');
+        updateStatus('✅ ' + i18n.t('messages.settingsImported'), 'success');
         setTimeout(() => statusMessage.textContent = '', 3000);
         event.target.value = '';
     } catch (error) {
         console.error('Import settings error:', error);
-        updateStatus(`❌ Import failed: ${error.message}`, 'error');
+        updateStatus('❌ ' + i18n.t('errors.importFailed', { error: error.message }), 'error');
         event.target.value = '';
     }
 }
@@ -1447,12 +1465,12 @@ function applyImportedSettings(imported) {
 }
 
 function clearSettings() {
-    if (!confirm('Clear all saved settings? This will reset symbols, timeframes, options, and ranges.')) {
+    if (!confirm(i18n.t('dialogs.confirmClear'))) {
         return;
     }
 
     localStorage.removeItem('backtestSettings');
-    alert('Settings cleared! Reloading page...');
+    alert(i18n.t('messages.settingsCleared'));
     location.reload();
 }
 
@@ -1512,11 +1530,11 @@ window.removeSymbol = (symbol) => {
 // --- OPTIONS FETCHING & RENDERING ---
 async function fetchOptions() {
     if (!state.indicatorId) {
-        optionsContainer.innerHTML = '<p>Please select an indicator.</p>';
+        optionsContainer.innerHTML = `<p>${i18n.t('messages.pleaseSelectIndicator')}</p>`;
         return;
     }
 
-    optionsContainer.innerHTML = '<p>Loading options...</p>';
+    optionsContainer.innerHTML = `<p>${i18n.t('messages.loadingOptions')}</p>`;
     step2.classList.remove('hidden');
     step3.classList.add('hidden');
 
@@ -1554,7 +1572,7 @@ async function fetchOptions() {
 
     } catch (e) {
         console.error('Error fetching options:', e);
-        optionsContainer.innerHTML = `<p class="negative">Error loading options: ${e.message}</p>`;
+        optionsContainer.innerHTML = `<p class="negative">${i18n.t('errors.loadingOptions', { message: e.message })}</p>`;
     }
 }
 
@@ -1592,7 +1610,7 @@ function renderOptions(indicator) {
         const tabGroups = indicator.groups.filter(g => g.tab === tab.name);
 
         if (tabGroups.length === 0) {
-            tabPane.innerHTML = '<p class="empty-tab">No settings available in this tab.</p>';
+            tabPane.innerHTML = `<p class="empty-tab">${i18n.t('messages.noSettingsInTab')}</p>`;
         } else {
             tabGroups.forEach(group => {
                 const groupEl = renderGroup(group, indicator.inputs, useSaved, saved);
@@ -1979,7 +1997,7 @@ function updateBacktestSummary() {
 
 function resetButtons() {
     runBacktestBtn.disabled = false;
-    runBacktestBtn.textContent = 'Run Backtest';
+    runBacktestBtn.textContent = i18n.t('buttons.runBacktest');
     stopBacktestBtn.classList.add('hidden');
     state.currentJobId = null;
     localStorage.removeItem('currentJobId'); // Clear active job
@@ -2047,7 +2065,7 @@ async function stopBacktest() {
         const data = await response.json();
 
         if (data.success) {
-            statusMessage.textContent = '⚠️ Backtest stopped by user';
+            statusMessage.textContent = i18n.t('messages.backtestStopped');
             statusMessage.style.color = '#ff9800';
         }
 
@@ -2129,7 +2147,7 @@ function updateRowStatus(data, status) {
         row.classList.add('result-row-running');
         const pendingCell = row.querySelector('.pending-cell');
         if (pendingCell) {
-            pendingCell.innerHTML = '<span class="running-indicator">🔄 Running...</span>';
+            pendingCell.innerHTML = `<span class="running-indicator">🔄 ${i18n.t('messages.runningInline')}</span>`;
         }
     }
 }
@@ -2292,7 +2310,7 @@ function formatNumber(num) {
 // Export results to JSON file
 function exportResultsJSON() {
     if (!state.results || state.results.length === 0) {
-        alert('No results to export');
+        alert(i18n.t('errors.noResults'));
         return;
     }
 
@@ -2335,23 +2353,23 @@ function exportResultsJSON() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        updateStatus(`✅ Results exported to ${filename} (${state.results.length} results)`, 'success');
+        updateStatus('✅ ' + i18n.t('messages.resultsExported', { filename, count: state.results.length }), 'success');
         setTimeout(() => statusMessage.textContent = '', 3000);
     } catch (error) {
         console.error('Export results error:', error);
-        updateStatus(`❌ Export failed: ${error.message}`, 'error');
+        updateStatus('❌ ' + i18n.t('errors.exportFailed', { error: error.message }), 'error');
     }
 }
 
 // Export results to Excel (wrapper for existing functionality)
 async function exportResultsExcel() {
     if (!state.results || state.results.length === 0) {
-        alert('No results to export');
+        alert(i18n.t('errors.noResults'));
         return;
     }
 
     try {
-        updateStatus('📊 Generating Excel file...', 'info');
+        updateStatus('📊 ' + i18n.t('messages.generatingExcel'), 'info');
 
         const response = await fetch('/api/export', {
             method: 'POST',
@@ -2371,11 +2389,11 @@ async function exportResultsExcel() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        updateStatus('✅ Excel file downloaded', 'success');
+        updateStatus('✅ ' + i18n.t('messages.excelDownloaded'), 'success');
         setTimeout(() => statusMessage.textContent = '', 3000);
     } catch (error) {
         console.error('Excel export error:', error);
-        updateStatus(`❌ Export failed: ${error.message}`, 'error');
+        updateStatus('❌ ' + i18n.t('errors.exportFailed', { error: error.message }), 'error');
     }
 }
 
@@ -2385,7 +2403,7 @@ async function handleImportResults(event) {
     if (!file) return;
 
     try {
-        updateStatus('📤 Importing results...', 'info');
+        updateStatus('📤 ' + i18n.t('messages.importingResults'), 'info');
 
         const text = await file.text();
         const imported = JSON.parse(text);
@@ -2393,12 +2411,12 @@ async function handleImportResults(event) {
         validateImportedResults(imported);
 
         applyImportedResults(imported);
-        updateStatus(`✅ Imported ${imported.results.length} results`, 'success');
+        updateStatus('✅ ' + i18n.t('messages.resultsImported', { count: imported.results.length }), 'success');
         setTimeout(() => statusMessage.textContent = '', 3000);
         event.target.value = '';
     } catch (error) {
         console.error('Import results error:', error);
-        updateStatus(`❌ Import failed: ${error.message}`, 'error');
+        updateStatus('❌ ' + i18n.t('errors.importFailed', { error: error.message }), 'error');
         event.target.value = '';
     }
 }
@@ -2551,14 +2569,14 @@ async function exportHistoryJobJSON(jobId) {
 
     } catch (error) {
         console.error('Export history job error:', error);
-        updateStatus(`❌ Export failed: ${error.message}`, 'error');
+        updateStatus('❌ ' + i18n.t('errors.exportFailed', { error: error.message }), 'error');
     }
 }
 
 // Export a specific job as Excel (from history)
 async function exportHistoryJobExcel(jobId) {
     try {
-        updateStatus('📊 Generating Excel file...', 'info');
+        updateStatus('📊 ' + i18n.t('messages.generatingExcel'), 'info');
 
         const syncData = getSyncData();
         const session = syncData?.session || 'anonymous';
@@ -2593,12 +2611,12 @@ async function exportHistoryJobExcel(jobId) {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        updateStatus('✅ Excel file downloaded', 'success');
+        updateStatus('✅ ' + i18n.t('messages.excelDownloaded'), 'success');
         setTimeout(() => statusMessage.textContent = '', 3000);
 
     } catch (error) {
         console.error('Export history job Excel error:', error);
-        updateStatus(`❌ Export failed: ${error.message}`, 'error');
+        updateStatus('❌ ' + i18n.t('errors.exportFailed', { error: error.message }), 'error');
     }
 }
 
@@ -2665,7 +2683,7 @@ let currentChart = null;
 
 function openAnalyticsModal(result) {
     if (!result.fullReport) {
-        alert('No detailed data available for this result');
+        alert(i18n.t('errors.noDetailedData'));
         return;
     }
 
@@ -2806,7 +2824,7 @@ function renderEquityChart(report) {
             labels: labels,
             datasets: [
                 {
-                    label: 'Equity',
+                    label: i18n.t('chart.equity'),
                     data: equity,
                     borderColor: '#00bfa5',
                     backgroundColor: 'rgba(0, 191, 165, 0.1)',
@@ -2816,7 +2834,7 @@ function renderEquityChart(report) {
                     yAxisID: 'y'
                 },
                 {
-                    label: 'Drawdown %',
+                    label: i18n.t('chart.drawdown'),
                     data: drawdownPercent,
                     borderColor: '#f23645',
                     backgroundColor: 'rgba(242, 54, 69, 0.1)',
@@ -2885,7 +2903,7 @@ function renderEquityChart(report) {
                     },
                     title: {
                         display: true,
-                        text: 'Equity',
+                        text: i18n.t('chart.equity'),
                         color: '#00bfa5'
                     }
                 },
@@ -2904,7 +2922,7 @@ function renderEquityChart(report) {
                     },
                     title: {
                         display: true,
-                        text: 'Drawdown %',
+                        text: i18n.t('chart.drawdown'),
                         color: '#f23645'
                     },
                     // Reverse the scale so drawdown goes down from 0
@@ -2921,7 +2939,7 @@ function renderPerformanceTab(report) {
     const perf = report.performance;
 
     if (!perf) {
-        container.innerHTML = '<p>No performance data available</p>';
+        container.innerHTML = `<p>${i18n.t('messages.noPerformanceData')}</p>`;
         return;
     }
 
@@ -2955,7 +2973,7 @@ function renderTradesTab(report) {
     const tbody = document.getElementById('tradesTableBody');
 
     if (!report.trades || report.trades.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9">No trades available</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="9">${i18n.t('messages.noTrades')}</td></tr>`;
         return;
     }
 

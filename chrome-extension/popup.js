@@ -6,14 +6,14 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
     statusDiv.style.display = 'none';
     statusDiv.className = 'status';
     btn.disabled = true;
-    btn.textContent = 'Syncing...';
+    btn.textContent = chrome.i18n.getMessage('syncingButton');
 
     try {
         // 1. Get current tab
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
         if (!tab.url.includes('tradingview.com')) {
-            throw new Error('Please open a TradingView chart first.');
+            throw new Error(chrome.i18n.getMessage('errorNoChart'));
         }
 
         // 2. Get Cookies
@@ -21,7 +21,7 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
         const signCookie = await chrome.cookies.get({ url: 'https://www.tradingview.com', name: 'sessionid_sign' });
 
         if (!sessionCookie) {
-            throw new Error('Could not find sessionid cookie. Are you logged in?');
+            throw new Error(chrome.i18n.getMessage('errorNoCookie'));
         }
 
         // 3. Get Active Indicators using chrome.scripting.executeScript (MAIN world)
@@ -531,16 +531,16 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                 'tvBacktestSync': syncData
             }, () => {
                 if (chrome.runtime.lastError) {
-                    statusDiv.textContent = `❌ Error: ${chrome.runtime.lastError.message}`;
+                    statusDiv.textContent = chrome.i18n.getMessage('errorGeneric', [chrome.runtime.lastError.message]);
                     statusDiv.className = 'status error';
                     statusDiv.style.display = 'block';
                     btn.disabled = false;
-                    btn.textContent = 'Sync with Backtester';
+                    btn.textContent = chrome.i18n.getMessage('syncButton');
                     return;
                 }
 
                 console.log('✅ Data saved to chrome.storage.local');
-                statusDiv.textContent = `✅ Synced! Found ${indicators.length} indicators. Opening server...`;
+                statusDiv.textContent = chrome.i18n.getMessage('successSync', [indicators.length.toString()]);
                 statusDiv.className = 'status success';
                 statusDiv.style.display = 'block';
 
@@ -568,21 +568,21 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
                 });
 
                 btn.disabled = false;
-                btn.textContent = 'Sync with Backtester';
+                btn.textContent = chrome.i18n.getMessage('syncButton');
             });
 
         } catch (error) {
-            statusDiv.textContent = `❌ Error: ${error.message}`;
+            statusDiv.textContent = chrome.i18n.getMessage('errorGeneric', [error.message]);
             statusDiv.className = 'status error';
             statusDiv.style.display = 'block';
             btn.disabled = false;
-            btn.textContent = 'Sync with Backtester';
+            btn.textContent = chrome.i18n.getMessage('syncButton');
         }
     } catch (error) {
-        statusDiv.textContent = `❌ Error: ${error.message}`;
+        statusDiv.textContent = chrome.i18n.getMessage('errorGeneric', [error.message]);
         statusDiv.className = 'status error';
         statusDiv.style.display = 'block';
         btn.disabled = false;
-        btn.textContent = 'Sync with Backtester';
+        btn.textContent = chrome.i18n.getMessage('syncButton');
     }
 });

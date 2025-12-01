@@ -1,0 +1,54 @@
+{
+  "extensionName": {
+    "message": "TradingView Backtest",
+    "description": "Extension name"
+  },
+  "extensionDescription": {
+    "message": "Extracts TradingView session and active indicators for local backtesting.",
+    "description": "Extension description"
+  },
+  "popupTitle": {
+    "message": "TV Backtest",
+    "description": "Popup title"
+  },
+  "infoMessage": {
+    "message": "Open a TradingView chart with your strategy, then click Sync to send your session and indicators to the local backtester.",
+    "description": "Info text"
+  },
+  "syncButton": {
+    "message": "Sync with Backtester",
+    "description": "Sync button"
+  },
+  "syncingButton": {
+    "message": "Syncing...",
+    "description": "Syncing state"
+  },
+  "errorNoChart": {
+    "message": "Please open a TradingView chart first.",
+    "description": "Error when not on TradingView"
+  },
+  "errorNoCookie": {
+    "message": "Could not find sessionid cookie. Are you logged in?",
+    "description": "Error missing session"
+  },
+  "successSync": {
+    "message": "Synced! Found $1 indicators. Opening server...",
+    "description": "Success message",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "3"
+      }
+    }
+  },
+  "errorGeneric": {
+    "message": "Error: $1",
+    "description": "Generic error",
+    "placeholders": {
+      "error": {
+        "content": "$1",
+        "example": "Connection failed"
+      }
+    }
+  }
+}

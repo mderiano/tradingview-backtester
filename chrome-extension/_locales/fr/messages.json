@@ -1,0 +1,54 @@
+{
+  "extensionName": {
+    "message": "TradingView Backtest",
+    "description": "Nom de l'extension"
+  },
+  "extensionDescription": {
+    "message": "Extrait la session TradingView et les indicateurs actifs pour les backtests locaux.",
+    "description": "Description de l'extension"
+  },
+  "popupTitle": {
+    "message": "TV Backtest",
+    "description": "Titre du popup"
+  },
+  "infoMessage": {
+    "message": "Ouvrez un graphique TradingView avec votre stratégie, puis cliquez sur Synchroniser pour envoyer votre session et vos indicateurs au backtester local.",
+    "description": "Texte d'information"
+  },
+  "syncButton": {
+    "message": "Synchroniser avec le Backtester",
+    "description": "Bouton de synchronisation"
+  },
+  "syncingButton": {
+    "message": "Synchronisation...",
+    "description": "État de synchronisation"
+  },
+  "errorNoChart": {
+    "message": "Veuillez d'abord ouvrir un graphique TradingView.",
+    "description": "Erreur pas sur TradingView"
+  },
+  "errorNoCookie": {
+    "message": "Impossible de trouver le cookie sessionid. Êtes-vous connecté?",
+    "description": "Erreur session manquante"
+  },
+  "successSync": {
+    "message": "Synchronisé! $1 indicateurs trouvés. Ouverture du serveur...",
+    "description": "Message de succès",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "3"
+      }
+    }
+  },
+  "errorGeneric": {
+    "message": "Erreur: $1",
+    "description": "Erreur générique",
+    "placeholders": {
+      "error": {
+        "content": "$1",
+        "example": "Connexion échouée"
+      }
+    }
+  }
+}

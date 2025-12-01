@@ -141,6 +141,43 @@ header p {
     right: 0;
     display: flex;
     gap: 1rem;
+    align-items: center;
+}
+
+/* Language Selector */
+.language-selector {
+    display: inline-flex;
+}
+
+.lang-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    transition: all 0.2s ease;
+}
+
+.lang-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+    transform: translateY(-1px);
+}
+
+.lang-flag {
+    font-size: 1.1em;
+}
+
+.lang-text {
+    font-weight: 600;
+    font-size: 0.85em;
+    min-width: 22px;
+    text-align: center;
+    color: var(--text-primary);
 }
 
 /* Cards */
