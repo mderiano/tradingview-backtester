@@ -227,6 +227,40 @@ document.addEventListener('DOMContentLoaded', async () => {
             autoLoadFromSync(event.data.data);
         }
     });
+
+    // Settings import/export event listeners
+    const exportSettingsBtn = document.getElementById('exportSettingsBtn');
+    const importSettingsBtn = document.getElementById('importSettingsBtn');
+    const importSettingsFile = document.getElementById('importSettingsFile');
+
+    if (exportSettingsBtn) {
+        exportSettingsBtn.addEventListener('click', exportSettings);
+    }
+    if (importSettingsBtn) {
+        importSettingsBtn.addEventListener('click', () => importSettingsFile.click());
+    }
+    if (importSettingsFile) {
+        importSettingsFile.addEventListener('change', handleImportSettings);
+    }
+
+    // Results import/export event listeners
+    const exportResultsJSONBtn = document.getElementById('exportResultsJSONBtn');
+    const exportResultsExcelBtn = document.getElementById('exportResultsExcelBtn');
+    const importResultsBtn = document.getElementById('importResultsBtn');
+    const importResultsFile = document.getElementById('importResultsFile');
+
+    if (exportResultsJSONBtn) {
+        exportResultsJSONBtn.addEventListener('click', exportResultsJSON);
+    }
+    if (exportResultsExcelBtn) {
+        exportResultsExcelBtn.addEventListener('click', exportResultsExcel);
+    }
+    if (importResultsBtn) {
+        importResultsBtn.addEventListener('click', () => importResultsFile.click());
+    }
+    if (importResultsFile) {
+        importResultsFile.addEventListener('change', handleImportResults);
+    }
 });
 
 // Auto-load data from sync
@@ -367,14 +401,27 @@ function renderHistory(jobs) {
             <td><span class="status-badge ${statusClass}">${job.status}</span></td>
             <td title="${job.symbols?.join(', ') || ''}">${symbolsDisplay}</td>
             <td>${job.symbolCount || 0}</td>
-            <td>
+            <td class="actions-cell">
                 <button class="btn small primary load-job-btn" data-job-id="${job.id}">Load</button>
+                <button class="btn small secondary export-json-btn" data-job-id="${job.id}">📥 JSON</button>
+                <button class="btn small secondary export-excel-btn" data-job-id="${job.id}">📥 Excel</button>
             </td>
         `;
-        
-        // Add click handler to the button
+
+        // Add click handlers to the buttons
         const loadBtn = row.querySelector('.load-job-btn');
+        const exportJSONBtn = row.querySelector('.export-json-btn');
+        const exportExcelBtn = row.querySelector('.export-excel-btn');
+
         loadBtn.addEventListener('click', () => handleLoadJob(job.id, loadBtn));
+        exportJSONBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            exportHistoryJobJSON(job.id);
+        });
+        exportExcelBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            exportHistoryJobExcel(job.id);
+        });
         
         historyTableBody.appendChild(row);
     });
@@ -1266,6 +1313,139 @@ function loadSettings() {
     }
 }
 
+// Export current settings to JSON file
+function exportSettings() {
+    try {
+        const settings = {
+            version: '1.0.0',
+            exportDate: new Date().toISOString(),
+            indicatorId: state.indicatorId,
+            indicatorName: window.currentIndicatorObj?.name || 'Unknown',
+            symbols: state.symbols,
+            timeframes: Array.from(document.querySelectorAll('input[name="timeframe"]:checked')).map(cb => cb.value),
+            options: state.options,
+            ranges: state.ranges,
+            dateFrom: dateFromInput.value,
+            dateTo: dateToInput.value,
+            inputMetadata: state.inputMetadata
+            // NOTE: session is NOT exported for security reasons
+        };
+
+        if (!settings.indicatorId) {
+            throw new Error('No indicator selected to export');
+        }
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        const filename = `backtest-settings-${timestamp}.json`;
+        const jsonString = JSON.stringify(settings, null, 2);
+
+        // Create and trigger download
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        updateStatus(`✅ Settings exported to ${filename}`, 'success');
+        setTimeout(() => statusMessage.textContent = '', 3000);
+    } catch (error) {
+        console.error('Export settings error:', error);
+        updateStatus(`❌ Export failed: ${error.message}`, 'error');
+    }
+}
+
+// Import settings from JSON file
+async function handleImportSettings(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    try {
+        updateStatus('📤 Importing settings...', 'info');
+
+        const text = await file.text();
+        const imported = JSON.parse(text);
+
+        validateImportedSettings(imported);
+
+        applyImportedSettings(imported);
+        updateStatus('✅ Settings imported successfully!', 'success');
+        setTimeout(() => statusMessage.textContent = '', 3000);
+        event.target.value = '';
+    } catch (error) {
+        console.error('Import settings error:', error);
+        updateStatus(`❌ Import failed: ${error.message}`, 'error');
+        event.target.value = '';
+    }
+}
+
+// Validate imported settings structure
+function validateImportedSettings(settings) {
+    if (!settings || typeof settings !== 'object') {
+        throw new Error('Invalid settings file: not a valid JSON object');
+    }
+    if (!settings.indicatorId) {
+        throw new Error('Invalid settings file: missing indicatorId');
+    }
+    if (!Array.isArray(settings.symbols)) {
+        throw new Error('Invalid settings file: symbols must be an array');
+    }
+    if (!Array.isArray(settings.timeframes)) {
+        throw new Error('Invalid settings file: timeframes must be an array');
+    }
+    if (typeof settings.options !== 'object') {
+        throw new Error('Invalid settings file: options must be an object');
+    }
+    if (typeof settings.ranges !== 'object') {
+        throw new Error('Invalid settings file: ranges must be an object');
+    }
+    return true;
+}
+
+// Apply imported settings to UI and state
+function applyImportedSettings(imported) {
+    state.indicatorId = imported.indicatorId;
+    state.symbols = imported.symbols || [];
+    renderSymbols();
+
+    if (imported.timeframes) {
+        document.querySelectorAll('input[name="timeframe"]').forEach(cb => {
+            cb.checked = imported.timeframes.includes(cb.value);
+        });
+    }
+
+    if (imported.dateFrom) dateFromInput.value = imported.dateFrom;
+    if (imported.dateTo) dateToInput.value = imported.dateTo;
+
+    state.options = imported.options || {};
+    state.ranges = imported.ranges || {};
+    state.inputMetadata = imported.inputMetadata || {};
+
+    const syncData = getSyncData();
+    if (syncData && syncData.indicators) {
+        const indicator = syncData.indicators.find(ind => ind.id === imported.indicatorId);
+
+        if (indicator) {
+            window.currentIndicatorObj = indicator;
+            window.savedOptionsAndRanges = {
+                indicatorId: imported.indicatorId,
+                options: imported.options,
+                ranges: imported.ranges
+            };
+            renderOptions(indicator);
+            step2.classList.remove('hidden');
+        } else {
+            updateStatus(`⚠️ Settings imported but indicator not found. Please sync from extension.`, 'warning');
+        }
+    }
+
+    updateBacktestSummary();
+    saveSettings();
+}
+
 function clearSettings() {
     if (!confirm('Clear all saved settings? This will reset symbols, timeframes, options, and ranges.')) {
         return;
@@ -2107,6 +2287,319 @@ function formatNumber(num) {
         return num.toFixed(2);
     }
     return num;
+}
+
+// Export results to JSON file
+function exportResultsJSON() {
+    if (!state.results || state.results.length === 0) {
+        alert('No results to export');
+        return;
+    }
+
+    try {
+        const exportData = {
+            version: '1.0.0',
+            exportDate: new Date().toISOString(),
+            jobId: state.currentJobId,
+            // NOTE: session is NOT exported for security reasons
+            config: {
+                indicatorId: state.indicatorId,
+                indicatorName: window.currentIndicatorObj?.name || 'Unknown',
+                symbols: state.symbols,
+                timeframes: Array.from(document.querySelectorAll('input[name="timeframe"]:checked')).map(cb => cb.value),
+                options: state.options,
+                ranges: state.ranges,
+                dateFrom: dateFromInput.value,
+                dateTo: dateToInput.value
+            },
+            results: state.results,
+            summary: {
+                totalResults: state.results.length,
+                successCount: state.results.filter(r => !r.error).length,
+                errorCount: state.results.filter(r => r.error).length,
+                totalTrades: state.results.reduce((sum, r) => sum + (r.report?.totalClosedTrades || 0), 0)
+            }
+        };
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        const filename = `backtest-results-${timestamp}.json`;
+        const jsonString = JSON.stringify(exportData, null, 2);
+
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        updateStatus(`✅ Results exported to ${filename} (${state.results.length} results)`, 'success');
+        setTimeout(() => statusMessage.textContent = '', 3000);
+    } catch (error) {
+        console.error('Export results error:', error);
+        updateStatus(`❌ Export failed: ${error.message}`, 'error');
+    }
+}
+
+// Export results to Excel (wrapper for existing functionality)
+async function exportResultsExcel() {
+    if (!state.results || state.results.length === 0) {
+        alert('No results to export');
+        return;
+    }
+
+    try {
+        updateStatus('📊 Generating Excel file...', 'info');
+
+        const response = await fetch('/api/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ results: state.results })
+        });
+
+        if (!response.ok) throw new Error('Export failed');
+
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `backtest-results-${new Date().toISOString().slice(0, 10)}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        updateStatus('✅ Excel file downloaded', 'success');
+        setTimeout(() => statusMessage.textContent = '', 3000);
+    } catch (error) {
+        console.error('Excel export error:', error);
+        updateStatus(`❌ Export failed: ${error.message}`, 'error');
+    }
+}
+
+// Import results from JSON file
+async function handleImportResults(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    try {
+        updateStatus('📤 Importing results...', 'info');
+
+        const text = await file.text();
+        const imported = JSON.parse(text);
+
+        validateImportedResults(imported);
+
+        applyImportedResults(imported);
+        updateStatus(`✅ Imported ${imported.results.length} results`, 'success');
+        setTimeout(() => statusMessage.textContent = '', 3000);
+        event.target.value = '';
+    } catch (error) {
+        console.error('Import results error:', error);
+        updateStatus(`❌ Import failed: ${error.message}`, 'error');
+        event.target.value = '';
+    }
+}
+
+// Validate imported results structure
+function validateImportedResults(data) {
+    if (!data || typeof data !== 'object') {
+        throw new Error('Invalid results file: not a valid JSON object');
+    }
+    if (!Array.isArray(data.results)) {
+        throw new Error('Invalid results file: results must be an array');
+    }
+    if (data.results.length === 0) {
+        throw new Error('Invalid results file: no results found');
+    }
+
+    const sampleResult = data.results[0];
+    if (!sampleResult.symbol || !sampleResult.timeframe) {
+        throw new Error('Invalid results file: results missing required fields');
+    }
+    return true;
+}
+
+// Generate UUID v4 (compatible with older browsers)
+function generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+// Apply imported results to UI
+function applyImportedResults(imported) {
+    state.results = [];
+    resultsTableBody.innerHTML = '';
+
+    // Generate new job ID, use current user's session
+    state.currentJobId = generateUUID();
+    // state.session stays as current user's session (not imported)
+
+    if (imported.config) {
+        const cfg = imported.config;
+
+        if (cfg.indicatorId) {
+            state.indicatorId = cfg.indicatorId;
+            step2.classList.remove('hidden');
+        }
+
+        if (cfg.symbols && Array.isArray(cfg.symbols)) {
+            state.symbols = cfg.symbols;
+            renderSymbols();
+        }
+
+        if (cfg.timeframes) {
+            document.querySelectorAll('input[name="timeframe"]').forEach(cb => {
+                cb.checked = cfg.timeframes.includes(cb.value);
+            });
+        }
+
+        if (cfg.dateFrom) dateFromInput.value = cfg.dateFrom;
+        if (cfg.dateTo) dateToInput.value = cfg.dateTo;
+
+        const syncData = getSyncData();
+        if (syncData && syncData.indicators && cfg.indicatorId) {
+            const indicator = syncData.indicators.find(ind => ind.id === cfg.indicatorId);
+            if (indicator) {
+                window.currentIndicatorObj = indicator;
+                window.savedOptionsAndRanges = {
+                    indicatorId: cfg.indicatorId,
+                    options: cfg.options || {},
+                    ranges: cfg.ranges || {}
+                };
+                renderOptions(indicator);
+                state.options = cfg.options || {};
+                state.ranges = cfg.ranges || {};
+            }
+        }
+    }
+
+    step3.classList.remove('hidden');
+
+    imported.results.forEach(result => {
+        state.results.push(result);
+        addResultRow(result);
+    });
+
+    const dateStr = imported.exportDate ? new Date(imported.exportDate).toLocaleString() : 'unknown date';
+    statusMessage.textContent = `Imported results from ${dateStr} (${imported.results.length} results)`;
+    statusMessage.style.color = '#4CAF50';
+
+    historyBtn.classList.remove('hidden');
+
+    // Close history modal and scroll to results
+    historyModal.classList.add('hidden');
+    setTimeout(() => {
+        step3.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+}
+
+// Export a specific job by ID (from history)
+async function exportHistoryJobJSON(jobId) {
+    try {
+        updateStatus('📥 Exporting job...', 'info');
+
+        const syncData = getSyncData();
+        const session = syncData?.session || 'anonymous';
+
+        const response = await fetch(`/api/jobs/${jobId}`, {
+            headers: { 'X-Session-ID': session }
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to load job');
+        }
+
+        const job = await response.json();
+
+        const exportData = {
+            version: '1.0.0',
+            exportDate: new Date().toISOString(),
+            jobId: job.id,
+            // NOTE: session is NOT exported for security reasons
+            config: job.config,
+            results: job.results || [],
+            summary: {
+                totalResults: job.results?.length || 0,
+                successCount: job.results?.filter(r => !r.error).length || 0,
+                errorCount: job.results?.filter(r => r.error).length || 0,
+                totalTrades: job.results?.reduce((sum, r) => sum + (r.report?.totalClosedTrades || 0), 0) || 0
+            }
+        };
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        const filename = `backtest-results-${jobId.substring(0, 8)}-${timestamp}.json`;
+        const jsonString = JSON.stringify(exportData, null, 2);
+
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        updateStatus(`✅ Job exported to ${filename}`, 'success');
+        setTimeout(() => statusMessage.textContent = '', 3000);
+
+    } catch (error) {
+        console.error('Export history job error:', error);
+        updateStatus(`❌ Export failed: ${error.message}`, 'error');
+    }
+}
+
+// Export a specific job as Excel (from history)
+async function exportHistoryJobExcel(jobId) {
+    try {
+        updateStatus('📊 Generating Excel file...', 'info');
+
+        const syncData = getSyncData();
+        const session = syncData?.session || 'anonymous';
+
+        const response = await fetch(`/api/jobs/${jobId}`, {
+            headers: { 'X-Session-ID': session }
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to load job');
+        }
+
+        const job = await response.json();
+
+        const exportResponse = await fetch('/api/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ results: job.results || [] })
+        });
+
+        if (!exportResponse.ok) {
+            throw new Error('Export failed');
+        }
+
+        const blob = await exportResponse.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `backtest-results-${jobId.substring(0, 8)}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        updateStatus('✅ Excel file downloaded', 'success');
+        setTimeout(() => statusMessage.textContent = '', 3000);
+
+    } catch (error) {
+        console.error('Export history job Excel error:', error);
+        updateStatus(`❌ Export failed: ${error.message}`, 'error');
+    }
 }
 
 

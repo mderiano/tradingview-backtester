@@ -39,8 +39,6 @@
             <section class="card hidden" id="step2">
                 <div class="section-header">
                     <h2>Configure Strategy</h2>
-                    <button id="reloadPreviousSettingsBtn" class="btn secondary hidden"
-                        title="Reload previous settings for this indicator">🔄 Reload Previous Settings</button>
                 </div>
 
                 <!-- Symbols Section -->
@@ -139,11 +137,25 @@
                     </div>
                 </div>
 
-                <div class="actions mt-4">
+                <!-- Settings Toolbar -->
+                <div class="settings-toolbar" style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-bottom: 0.5rem; padding: 0.5rem; background: rgba(255, 255, 255, 0.02); border-radius: 8px;">
+                    <button id="reloadPreviousSettingsBtn" class="btn secondary small hidden"
+                        title="Reload previous settings for this indicator">🔄 Reload</button>
+                    <button id="exportSettingsBtn" class="btn secondary small" title="Export current settings to JSON file">
+                        📥 Export
+                    </button>
+                    <button id="importSettingsBtn" class="btn secondary small" title="Import settings from JSON file">
+                        📤 Import
+                    </button>
+                    <input type="file" id="importSettingsFile" accept=".json" style="display: none;">
+                    <button id="clearSettingsBtn" class="btn secondary small"
+                        title="Clear all saved settings from localStorage">🗑️ Clear</button>
+                </div>
+
+                <!-- Main Actions -->
+                <div class="actions">
                     <button id="runBacktestBtn" class="btn primary large">Run Backtest</button>
                     <button id="stopBacktestBtn" class="btn secondary large hidden">Stop Backtest</button>
-                    <button id="clearSettingsBtn" class="btn secondary" style="margin-left: auto;"
-                        title="Clear all saved settings from localStorage">Clear Settings</button>
                 </div>
             </section>
 
@@ -163,7 +175,15 @@
                 </div>
 
                 <div id="statusMessage" class="status-message"></div>
-                <div class="table-hint">💡 Click any row to view detailed analytics</div>
+
+                <!-- Results Export Controls -->
+                <div class="results-actions" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <div class="table-hint">💡 Click any row to view detailed analytics</div>
+                    <div class="results-io-group" style="display: flex; gap: 0.5rem;">
+                        <button id="exportResultsJSONBtn" class="btn secondary small">📥 Export JSON</button>
+                        <button id="exportResultsExcelBtn" class="btn secondary small">📥 Export Excel</button>
+                    </div>
+                </div>
 
                 <div class="table-container">
                     <table id="resultsTable">
@@ -269,7 +289,11 @@
         <div class="modal-content history-modal-content">
             <div class="modal-header">
                 <h2>Backtest History</h2>
-                <button class="close-btn" id="closeHistoryBtn">&times;</button>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <button id="importResultsBtn" class="btn secondary small">📤 Import Results</button>
+                    <input type="file" id="importResultsFile" accept=".json" style="display: none;">
+                    <button class="close-btn" id="closeHistoryBtn">&times;</button>
+                </div>
             </div>
             <div class="history-list-container">
                 <table class="history-table">
@@ -279,7 +303,7 @@
                             <th>Status</th>
                             <th>Symbols</th>
                             <th>Results</th>
-                            <th>Action</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody id="historyTableBody">

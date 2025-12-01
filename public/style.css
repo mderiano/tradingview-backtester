@@ -1416,3 +1416,34 @@ tbody tr:last-child td {
     font-size: 0.75rem;
     opacity: 0.8;
 }
+
+/* Import/Export Button Groups */
+.settings-io-group,
+.results-io-group {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.results-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.btn.small {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+}
+
+.history-table .actions-cell {
+    display: flex;
+    gap: 0.3rem;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.history-table .actions-cell .btn {
+    margin: 0;
+}
