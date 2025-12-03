@@ -777,6 +777,9 @@ function connectWebSocket(jobId) {
         } else if (msg.type === 'progress') {
             // Update progress bar (no text status message)
             updateProgressBar(msg.percent, msg.current, msg.total);
+        } else if (msg.type === 'saved') {
+            // Update saved progress indicator
+            updateSavedProgress(msg.index, msg.total);
         } else if (msg.type === 'result') {
             state.results.push(msg.data);
             updateRowWithResult(msg.data);
@@ -794,6 +797,11 @@ function connectWebSocket(jobId) {
         } else if (msg.type === 'complete') {
             statusMessage.textContent = '✅ ' + i18n.t('messages.backtestComplete');
             statusMessage.style.color = '#4CAF50';
+            // Hide saved progress after completion
+            setTimeout(() => {
+                const savedContainer = document.getElementById('savedProgressContainer');
+                if (savedContainer) savedContainer.style.display = 'none';
+            }, 3000);
             resetButtons();
             ws.close();
         } else if (msg.type === 'error') {
@@ -2027,6 +2035,22 @@ function hideProgressBar() {
     if (progressContainer) {
         progressContainer.classList.add('hidden');
     }
+    // Also hide saved progress
+    const savedContainer = document.getElementById('savedProgressContainer');
+    if (savedContainer) {
+        savedContainer.style.display = 'none';
+    }
+}
+
+// Update saved progress indicator
+function updateSavedProgress(saved, total) {
+    const savedContainer = document.getElementById('savedProgressContainer');
+    const savedText = document.getElementById('savedProgressText');
+    
+    if (savedContainer && savedText) {
+        savedContainer.style.display = 'flex';
+        savedText.textContent = `💾 Sauvegardé: ${saved} / ${total}`;
+    }
 }
 
 // Check timeframe/period warnings
@@ -2307,36 +2331,72 @@ function formatNumber(num) {
     return num;
 }
 
-// Export results to JSON file
-function exportResultsJSON() {
-    if (!state.results || state.results.length === 0) {
+// Export results to JSON file (streaming from server for large datasets, fallback to client-side)
+async function exportResultsJSON() {
+    // Check if we have results to export
+    if (!state.currentJobId && (!state.results || state.results.length === 0)) {
         alert(i18n.t('errors.noResults'));
         return;
     }
 
     try {
+        updateStatus('📦 ' + i18n.t('messages.preparingExport', { default: 'Préparation de l\'export...' }), 'info');
+        
+        const syncData = getSyncData();
+        const session = syncData?.session || '';
+        
+        // Try server-side streaming export first (for incremental format jobs)
+        if (state.currentJobId) {
+            const sizeResponse = await fetch(`/api/jobs/${state.currentJobId}/size?session=${encodeURIComponent(session)}`, {
+                headers: { 'X-Session-Id': session }
+            });
+            
+            if (sizeResponse.ok) {
+                // Job exists on server in incremental format - use streaming export
+                const sizeInfo = await sizeResponse.json();
+                const sizeMB = (sizeInfo.compressedSize / (1024 * 1024)).toFixed(2);
+                updateStatus(`📦 Export en cours... (~${sizeMB} MB compressé, ${sizeInfo.resultCount} résultats)`, 'info');
+                
+                // Download the compressed export directly
+                const exportUrl = `/api/jobs/${state.currentJobId}/export?session=${encodeURIComponent(session)}`;
+                
+                const a = document.createElement('a');
+                a.href = exportUrl;
+                a.download = ''; // Let server set filename
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+
+                updateStatus('✅ ' + i18n.t('messages.resultsExported', { filename: 'backtest-results.json.gz', count: sizeInfo.resultCount }), 'success');
+                setTimeout(() => statusMessage.textContent = '', 3000);
+                return;
+            }
+        }
+        
+        // Fallback: client-side export (for results loaded in memory)
+        if (!state.results || state.results.length === 0) {
+            alert(i18n.t('errors.noResults'));
+            return;
+        }
+        
+        updateStatus('📦 Export client-side en cours...', 'info');
+        
         const exportData = {
-            version: '1.0.0',
+            exportVersion: '2.0',
             exportDate: new Date().toISOString(),
             jobId: state.currentJobId,
-            // NOTE: session is NOT exported for security reasons
             config: {
                 indicatorId: state.indicatorId,
-                indicatorName: window.currentIndicatorObj?.name || 'Unknown',
                 symbols: state.symbols,
                 timeframes: Array.from(document.querySelectorAll('input[name="timeframe"]:checked')).map(cb => cb.value),
-                options: state.options,
-                ranges: state.ranges,
                 dateFrom: dateFromInput.value,
                 dateTo: dateToInput.value
             },
-            results: state.results,
             summary: {
                 totalResults: state.results.length,
-                successCount: state.results.filter(r => !r.error).length,
-                errorCount: state.results.filter(r => r.error).length,
-                totalTrades: state.results.reduce((sum, r) => sum + (r.report?.totalClosedTrades || 0), 0)
-            }
+                status: 'exported'
+            },
+            results: state.results
         };
 
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
@@ -2397,7 +2457,7 @@ async function exportResultsExcel() {
     }
 }
 
-// Import results from JSON file
+// Import results from JSON or JSON.GZ file
 async function handleImportResults(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -2405,7 +2465,19 @@ async function handleImportResults(event) {
     try {
         updateStatus('📤 ' + i18n.t('messages.importingResults'), 'info');
 
-        const text = await file.text();
+        let text;
+        
+        // Check if file is gzip compressed
+        if (file.name.endsWith('.gz')) {
+            // Use DecompressionStream to decompress gzip
+            const ds = new DecompressionStream('gzip');
+            const decompressedStream = file.stream().pipeThrough(ds);
+            const decompressedBlob = await new Response(decompressedStream).blob();
+            text = await decompressedBlob.text();
+        } else {
+            text = await file.text();
+        }
+        
         const imported = JSON.parse(text);
 
         validateImportedResults(imported);

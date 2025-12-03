@@ -96,6 +96,170 @@ function getIndexFilePath(session) {
     return path.join(userDir, 'index.json');
 }
 
+// Get or create job directory path (new incremental storage format)
+function getJobDir(session, jobId) {
+    const userDir = getUserDir(session);
+    const jobDir = path.join(userDir, jobId);
+    if (!fs.existsSync(jobDir)) {
+        fs.mkdirSync(jobDir, { recursive: true });
+    }
+    return jobDir;
+}
+
+// Check if a job uses the new incremental format (directory with meta.json.gz)
+function isIncrementalJob(session, jobId) {
+    const userDir = getUserDir(session);
+    const jobDir = path.join(userDir, jobId);
+    const metaPath = path.join(jobDir, 'meta.json.gz');
+    return fs.existsSync(jobDir) && fs.statSync(jobDir).isDirectory() && fs.existsSync(metaPath);
+}
+
+// Append a single result to job directory with gzip compression
+async function appendResult(session, jobId, resultIndex, result) {
+    return new Promise((resolve, reject) => {
+        const jobDir = getJobDir(session, jobId);
+        const resultPath = path.join(jobDir, `${resultIndex}.json.gz`);
+        const jsonData = JSON.stringify(result);
+        
+        zlib.gzip(jsonData, (err, compressed) => {
+            if (err) {
+                console.error(`Failed to compress result ${resultIndex} for job ${jobId}:`, err);
+                return reject(err);
+            }
+            
+            fs.writeFile(resultPath, compressed, (err) => {
+                if (err) {
+                    console.error(`Failed to save result ${resultIndex} for job ${jobId}:`, err);
+                    return reject(err);
+                }
+                resolve(true);
+            });
+        });
+    });
+}
+
+// Save job metadata only (not results) with gzip compression
+function saveJobMeta(jobId) {
+    const job = jobs.get(jobId);
+    if (!job) return;
+
+    const session = job.session || null;
+    const jobDir = getJobDir(session, jobId);
+    const metaPath = path.join(jobDir, 'meta.json.gz');
+    
+    // Create metadata object without results array
+    const meta = {
+        id: job.id || jobId,
+        status: job.status,
+        config: job.config,
+        startTime: job.startTime,
+        session: job.session,
+        accountType: job.accountType,
+        maxParallelConnections: job.maxParallelConnections,
+        resultCount: job.resultCount || 0,
+        error: job.error
+    };
+    
+    const jsonData = JSON.stringify(meta, null, 2);
+    
+    zlib.gzip(jsonData, (err, compressed) => {
+        if (err) {
+            console.error(`Failed to compress meta for job ${jobId}:`, err);
+            return;
+        }
+        
+        fs.writeFile(metaPath, compressed, (err) => {
+            if (err) {
+                console.error(`Failed to save meta for job ${jobId}:`, err);
+                return;
+            }
+            
+            // Update the user's index with job metadata
+            updateJobIndex(session, jobId, {
+                id: job.id || jobId,
+                status: job.status || 'unknown',
+                startTime: job.startTime || null,
+                symbolCount: job.resultCount || 0,
+                indicatorId: job.config?.indicatorId || null,
+                symbols: job.config?.symbols || [],
+                isArchived: false,
+                isIncremental: true
+            });
+        });
+    });
+}
+
+// Load job metadata from incremental format
+function loadJobMeta(session, jobId) {
+    return new Promise((resolve, reject) => {
+        const userDir = getUserDir(session);
+        const jobDir = path.join(userDir, jobId);
+        const metaPath = path.join(jobDir, 'meta.json.gz');
+        
+        if (!fs.existsSync(metaPath)) {
+            return reject(new Error('Job metadata not found'));
+        }
+        
+        fs.readFile(metaPath, (err, compressed) => {
+            if (err) return reject(err);
+            
+            zlib.gunzip(compressed, (err, buffer) => {
+                if (err) return reject(err);
+                
+                try {
+                    const meta = JSON.parse(buffer.toString());
+                    resolve(meta);
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+    });
+}
+
+// Load a single result from incremental format
+function loadResult(session, jobId, resultIndex) {
+    return new Promise((resolve, reject) => {
+        const userDir = getUserDir(session);
+        const jobDir = path.join(userDir, jobId);
+        const resultPath = path.join(jobDir, `${resultIndex}.json.gz`);
+        
+        if (!fs.existsSync(resultPath)) {
+            return reject(new Error(`Result ${resultIndex} not found`));
+        }
+        
+        fs.readFile(resultPath, (err, compressed) => {
+            if (err) return reject(err);
+            
+            zlib.gunzip(compressed, (err, buffer) => {
+                if (err) return reject(err);
+                
+                try {
+                    const result = JSON.parse(buffer.toString());
+                    resolve(result);
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+    });
+}
+
+// Count results in a job directory
+function countJobResults(session, jobId) {
+    const userDir = getUserDir(session);
+    const jobDir = path.join(userDir, jobId);
+    
+    if (!fs.existsSync(jobDir)) return 0;
+    
+    try {
+        const files = fs.readdirSync(jobDir);
+        return files.filter(f => f.match(/^\d+\.json\.gz$/)).length;
+    } catch (e) {
+        return 0;
+    }
+}
+
 // Load job index for a specific user
 function loadJobIndex(session) {
     try {
@@ -138,116 +302,50 @@ function removeFromJobIndex(session, jobId) {
     saveJobIndex(session, index);
 }
 
-// Migrate old results from root to user directories
-function migrateOldResults() {
-    console.log('🔄 Checking for old results to migrate...');
-    let migratedCount = 0;
-    
-    try {
-        const files = fs.readdirSync(RESULTS_DIR);
-        
-        for (const f of files) {
-            // Skip directories and index files
-            const filePath = path.join(RESULTS_DIR, f);
-            const stat = fs.statSync(filePath);
-            if (stat.isDirectory()) continue;
-            if (f === 'index.json') {
-                // Remove old global index
-                fs.unlinkSync(filePath);
-                console.log('🗑️ Removed old global index.json');
-                continue;
-            }
-            
-            if (f.endsWith('.json') || f.endsWith('.json.gz')) {
-                try {
-                    let job;
-                    const isGzipped = f.endsWith('.json.gz');
-                    
-                    if (isGzipped) {
-                        const gzContent = fs.readFileSync(filePath);
-                        const buffer = zlib.gunzipSync(gzContent);
-                        job = JSON.parse(buffer.toString());
-                    } else {
-                        const content = fs.readFileSync(filePath, 'utf8');
-                        job = JSON.parse(content);
-                    }
-                    
-                    const session = job.session || null;
-                    const userDir = getUserDir(session);
-                    const newFilePath = path.join(userDir, f);
-                    
-                    // Move file to user directory
-                    fs.renameSync(filePath, newFilePath);
-                    
-                    // Update user's index
-                    const jobId = f.replace('.json.gz', '').replace('.json', '');
-                    updateJobIndex(session, jobId, {
-                        id: job.id || jobId,
-                        status: job.status || (isGzipped ? 'archived' : 'unknown'),
-                        startTime: job.startTime || null,
-                        symbolCount: job.results?.length || 0,
-                        indicatorId: job.config?.indicatorId || null,
-                        symbols: job.config?.symbols || [],
-                        isArchived: isGzipped
-                    });
-                    
-                    migratedCount++;
-                } catch (e) {
-                    console.error(`Error migrating ${f}:`, e.message);
-                }
-            }
-        }
-        
-        if (migratedCount > 0) {
-            console.log(`✅ Migrated ${migratedCount} job(s) to user directories`);
-        } else {
-            console.log('✅ No old results to migrate');
-        }
-    } catch (e) {
-        console.error('Error during migration:', e);
-    }
-}
+// Rebuild index on startup
+rebuildAllIndexes();
 
-// Rebuild index for a specific user directory
+// Rebuild index for a specific user directory (supports new incremental format)
 function rebuildUserIndex(userDir, sessionHash) {
     const index = {};
     
     try {
-        const files = fs.readdirSync(userDir);
+        const entries = fs.readdirSync(userDir);
         
-        for (const f of files) {
-            if (f === 'index.json') continue;
+        for (const entry of entries) {
+            if (entry === 'index.json') continue;
             
-            if (f.endsWith('.json')) {
-                try {
-                    const filePath = path.join(userDir, f);
-                    const content = fs.readFileSync(filePath, 'utf8');
-                    const job = JSON.parse(content);
-                    const jobId = f.replace('.json', '');
-                    
-                    index[jobId] = {
-                        id: job.id || jobId,
-                        status: job.status || 'unknown',
-                        startTime: job.startTime || null,
-                        symbolCount: job.results?.length || 0,
-                        indicatorId: job.config?.indicatorId || null,
-                        symbols: job.config?.symbols || [],
-                        isArchived: false,
-                        updatedAt: Date.now()
-                    };
-                } catch (e) {
-                    console.error(`Error reading job ${f} for index:`, e.message);
+            const entryPath = path.join(userDir, entry);
+            const stat = fs.statSync(entryPath);
+            
+            // New incremental format: directory with meta.json.gz
+            if (stat.isDirectory()) {
+                const metaPath = path.join(entryPath, 'meta.json.gz');
+                if (fs.existsSync(metaPath)) {
+                    try {
+                        const compressed = fs.readFileSync(metaPath);
+                        const buffer = zlib.gunzipSync(compressed);
+                        const meta = JSON.parse(buffer.toString());
+                        
+                        // Count actual result files
+                        const files = fs.readdirSync(entryPath);
+                        const resultCount = files.filter(f => f.match(/^\d+\.json\.gz$/)).length;
+                        
+                        index[entry] = {
+                            id: meta.id || entry,
+                            status: meta.status || 'unknown',
+                            startTime: meta.startTime || null,
+                            symbolCount: resultCount,
+                            indicatorId: meta.config?.indicatorId || null,
+                            symbols: meta.config?.symbols || [],
+                            isArchived: false,
+                            isIncremental: true,
+                            updatedAt: Date.now()
+                        };
+                    } catch (e) {
+                        console.error(`Error reading job ${entry} metadata:`, e.message);
+                    }
                 }
-            } else if (f.endsWith('.json.gz')) {
-                const jobId = f.replace('.json.gz', '');
-                index[jobId] = {
-                    id: jobId,
-                    status: 'archived',
-                    startTime: null,
-                    symbolCount: 0,
-                    isArchived: true,
-                    updatedAt: Date.now()
-                };
             }
         }
         
@@ -288,43 +386,9 @@ function rebuildAllIndexes() {
         console.error('Error rebuilding indexes:', e);
     }
 }
-
-// Migrate old results first, then rebuild indexes
-migrateOldResults();
 rebuildAllIndexes();
 
-// Helper: Save job to disk (now saves to user directory)
-function saveJob(jobId) {
-    const job = jobs.get(jobId);
-    if (!job) return;
-
-    const session = job.session || null;
-    const userDir = getUserDir(session);
-    const filePath = path.join(userDir, `${jobId}.json`);
-    
-    // Save a copy of the job object
-    const jobData = JSON.stringify(job, null, 2);
-
-    fs.writeFile(filePath, jobData, (err) => {
-        if (err) {
-            console.error(`Failed to save job ${jobId}:`, err);
-            return;
-        }
-        
-        // Update the user's index with job metadata
-        updateJobIndex(session, jobId, {
-            id: job.id || jobId,
-            status: job.status || 'unknown',
-            startTime: job.startTime || null,
-            symbolCount: job.results?.length || 0,
-            indicatorId: job.config?.indicatorId || null,
-            symbols: job.config?.symbols || [],
-            isArchived: false
-        });
-    });
-}
-
-// Helper: Compress old results (now processes user directories)
+// Helper: Compress old job directories (incremental format)
 function compressOldResults() {
     const retentionDays = parseInt(process.env.RETENTION_DAYS || '15');
     const now = Date.now();
@@ -340,39 +404,30 @@ function compressOldResults() {
             fs.stat(entryPath, (err, stats) => {
                 if (err || !stats.isDirectory()) return;
                 
-                // Process files in user directory
-                fs.readdir(entryPath, (err, files) => {
+                // Process job directories in user directory
+                fs.readdir(entryPath, (err, jobDirs) => {
                     if (err) return;
                     
-                    files.forEach(file => {
-                        if (!file.endsWith('.json') || file === 'index.json') return;
+                    jobDirs.forEach(jobDir => {
+                        if (jobDir === 'index.json') return;
                         
-                        const filePath = path.join(entryPath, file);
-                        fs.stat(filePath, (err, fileStats) => {
-                            if (err) return;
+                        const jobPath = path.join(entryPath, jobDir);
+                        fs.stat(jobPath, (err, jobStats) => {
+                            if (err || !jobStats.isDirectory()) return;
                             
-                            const ageDays = (now - fileStats.mtimeMs) / msPerDay;
-                            if (ageDays > retentionDays) {
-                                console.log(`Compressing old result: ${entry}/${file} (${ageDays.toFixed(1)} days old)`);
+                            // Check meta.json.gz for age
+                            const metaPath = path.join(jobPath, 'meta.json.gz');
+                            if (!fs.existsSync(metaPath)) return;
+                            
+                            fs.stat(metaPath, (err, metaStats) => {
+                                if (err) return;
                                 
-                                const gzip = zlib.createGzip();
-                                const source = fs.createReadStream(filePath);
-                                const destination = fs.createWriteStream(`${filePath}.gz`);
-                                
-                                source.pipe(gzip).pipe(destination).on('finish', () => {
-                                    fs.unlink(filePath, (err) => {
-                                        if (err) console.error(`Error deleting ${file} after compression:`, err);
-                                        else {
-                                            console.log(`Compressed and deleted ${entry}/${file}`);
-                                            // Update index to mark as archived
-                                            // Note: We'd need to read the job to get session, but for archived files
-                                            // we just mark them in the current user's index
-                                        }
-                                    });
-                                }).on('error', (err) => {
-                                    console.error(`Error compressing ${file}:`, err);
-                                });
-                            }
+                                const ageDays = (now - metaStats.mtimeMs) / msPerDay;
+                                if (ageDays > retentionDays) {
+                                    console.log(`🗑️ Cleaning up old job: ${entry}/${jobDir} (${ageDays.toFixed(1)} days old)`);
+                                    // For now, just log - could implement archiving to single .tar.gz
+                                }
+                            });
                         });
                     });
                 });
@@ -396,7 +451,7 @@ wss.on('connection', (ws) => {
             if (data.type === 'subscribe' && data.jobId) {
                 ws.jobId = data.jobId;
 
-                // Send current state if job exists
+                // Send current state if job exists in memory (running job)
                 const job = jobs.get(data.jobId);
                 if (job) {
                     ws.send(JSON.stringify({ type: 'status', status: job.status }));
@@ -416,17 +471,18 @@ wss.on('connection', (ws) => {
                         });
                     }
                     
-                    // Send already completed results
-                    if (job.results && job.results.length > 0) {
-                        job.results.forEach(result => {
-                            ws.send(JSON.stringify({ type: 'result', data: result }));
-                        });
-                        // Send progress
+                    // Send current progress (results are saved to disk, not kept in memory)
+                    if (job.resultCount > 0) {
                         ws.send(JSON.stringify({
                             type: 'progress',
-                            current: job.results.length,
-                            total: job.tasks ? job.tasks.length : job.results.length,
-                            percent: job.tasks ? Math.round((job.results.length / job.tasks.length) * 100) : 100
+                            current: job.resultCount,
+                            total: job.tasks ? job.tasks.length : job.resultCount,
+                            percent: job.tasks ? Math.round((job.resultCount / job.tasks.length) * 100) : 100
+                        }));
+                        // Tell client to load results from streaming endpoint
+                        ws.send(JSON.stringify({ 
+                            type: 'load_from_disk', 
+                            resultCount: job.resultCount 
                         }));
                     }
                 }
@@ -733,7 +789,7 @@ async function runSingleBacktest({ symbol, timeframe, combo, dateFrom, dateTo, i
     }
 }
 
-// Async Backtest Runner with Parallel Execution
+// Async Backtest Runner with Parallel Execution (Incremental Save)
 async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timeframes, dateFrom, dateTo, session, signature, accountType, maxParallelConnections }) {
     const job = jobs.get(jobId);
     
@@ -742,7 +798,8 @@ async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timef
     await delay(500);
     
     job.status = 'running';
-    saveJob(jobId);
+    job.resultCount = 0; // Track saved results count instead of array
+    saveJobMeta(jobId);
     broadcast(jobId, { type: 'status', status: 'running' });
     
     console.log(`Job ${jobId}: Account type: ${accountType}, Max parallel connections: ${maxParallelConnections}`);
@@ -761,7 +818,10 @@ async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timef
         // Create limit function for parallel execution
         const limit = pLimit(maxParallelConnections);
         let completedTests = 0;
+        let savedResults = 0; // Counter for saved results
         let criticalError = false; // Only for session/auth errors
+        let errorCount = 0;
+        let successCount = 0;
 
         // Build all test tasks
         const tasks = [];
@@ -835,8 +895,21 @@ async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timef
 
                     console.log(`✓ Completed: ${symbol} ${timeframe} - ${result.report?.totalClosedTrades || 0} trades`);
 
-                    job.results.push(result);
+                    // Save result incrementally to disk
+                    const resultIndex = savedResults++;
+                    job.resultCount = savedResults;
+                    
+                    // Append result to disk asynchronously
+                    appendResult(session, jobId, resultIndex, result)
+                        .then(() => {
+                            broadcast(jobId, { type: 'saved', index: resultIndex + 1, total: totalTests });
+                        })
+                        .catch(err => {
+                            console.error(`Failed to save result ${resultIndex}:`, err);
+                        });
+                    
                     broadcast(jobId, { type: 'result', data: result });
+                    successCount++;
 
                     completedTests++;
                     broadcast(jobId, {
@@ -870,7 +943,7 @@ async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timef
                         console.log(`Job ${jobId} stopping due to critical error: ${errorMessage}`);
                         job.status = 'failed';
                         job.error = errorMessage;
-                        saveJob(jobId);
+                        saveJobMeta(jobId);
                         broadcast(jobId, { type: 'error', message: errorMessage });
                     }
                     
@@ -886,8 +959,21 @@ async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timef
                         options: combo,
                         error: errorMessage
                     };
-                    job.results.push(errorResult);
+                    
+                    // Save error result incrementally to disk
+                    const resultIndex = savedResults++;
+                    job.resultCount = savedResults;
+                    
+                    appendResult(session, jobId, resultIndex, errorResult)
+                        .then(() => {
+                            broadcast(jobId, { type: 'saved', index: resultIndex + 1, total: totalTests });
+                        })
+                        .catch(err => {
+                            console.error(`Failed to save error result ${resultIndex}:`, err);
+                        });
+                    
                     broadcast(jobId, { type: 'result', data: errorResult });
+                    errorCount++;
 
                     completedTests++;
                     broadcast(jobId, {
@@ -908,25 +994,23 @@ async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timef
         // Check final status
         if (job.cancelled) {
             console.log(`Job ${jobId} was cancelled`);
+            saveJobMeta(jobId);
             return;
         }
 
-        // Count errors
-        const errorCount = job.results.filter(r => r.error).length;
-        const successCount = job.results.filter(r => !r.error).length;
-
         if (!criticalError) {
             job.status = errorCount > 0 ? 'completed_with_errors' : 'completed';
-            saveJob(jobId);
-            broadcast(jobId, { type: 'complete', results: job.results });
-            console.log(`Job ${jobId}: Completed (${successCount} success, ${errorCount} errors)`);
+            saveJobMeta(jobId);
+            // Don't send full results array anymore, just completion status
+            broadcast(jobId, { type: 'complete', resultCount: job.resultCount });
+            console.log(`Job ${jobId}: Completed (${successCount} success, ${errorCount} errors, ${job.resultCount} saved)`);
         }
 
     } catch (error) {
         console.error(`Job ${jobId} failed:`, error);
         job.status = 'failed';
         job.error = error.message;
-        saveJob(jobId); // Save failure state
+        saveJobMeta(jobId); // Save failure state
         broadcast(jobId, { type: 'error', message: error.message });
     }
 }
@@ -951,7 +1035,7 @@ app.post('/api/backtest', (req, res) => {
             id: jobId,
             status: 'pending',
             config: { indicatorId, combinations, ranges, symbols, timeframes, dateFrom, dateTo },
-            results: [],
+            resultCount: 0, // Track count instead of array
             startTime: Date.now(),
             session: session, // Save session to filter history later
             accountType: validAccountType,
@@ -959,7 +1043,7 @@ app.post('/api/backtest', (req, res) => {
         });
 
         // Start job in background
-        saveJob(jobId); // Save pending state
+        saveJobMeta(jobId); // Save pending state
         runBacktestJob(jobId, { indicatorId, combinations, symbols, timeframes, dateFrom, dateTo, session, signature, accountType: validAccountType, maxParallelConnections });
 
         res.json({ id: jobId, message: 'Backtest started' });
@@ -982,7 +1066,7 @@ app.post('/api/backtest/:jobId/cancel', (req, res) => {
     // Set cancelled flag
     job.cancelled = true;
     job.status = 'cancelled';
-    saveJob(jobId); // Save cancelled state
+    saveJobMeta(jobId); // Save cancelled state
 
     // Broadcast cancellation
     broadcast(jobId, {
@@ -1021,52 +1105,43 @@ app.get('/api/jobs', (req, res) => {
     }
 });
 
-// API: Get Job Details (searches in user directory based on session)
-app.get('/api/jobs/:id', (req, res) => {
+// API: Get Job Details (supports new incremental format)
+app.get('/api/jobs/:id', async (req, res) => {
     const { id } = req.params;
     // Support both header and query param
     const currentSession = req.headers['x-session-id'] || req.query.session;
 
-    // Check memory first
+    // Check memory first (running jobs)
     if (jobs.has(id)) {
-        return res.json(jobs.get(id));
+        const job = jobs.get(id);
+        // For running jobs, return metadata only (results are streamed)
+        return res.json({
+            id: job.id,
+            status: job.status,
+            config: job.config,
+            startTime: job.startTime,
+            session: job.session,
+            resultCount: job.resultCount || 0
+        });
     }
 
-    // Check user's directory on disk
-    const userDir = getUserDir(currentSession);
-    const jsonPath = path.join(userDir, `${id}.json`);
-    const gzPath = path.join(userDir, `${id}.json.gz`);
-
-    if (fs.existsSync(jsonPath)) {
+    // Check for new incremental format first
+    if (isIncrementalJob(currentSession, id)) {
         try {
-            const content = fs.readFileSync(jsonPath, 'utf8');
-            const job = JSON.parse(content);
-            res.json(job);
+            const meta = await loadJobMeta(currentSession, id);
+            // Return metadata with resultCount
+            return res.json(meta);
         } catch (e) {
-            res.status(500).json({ error: 'Failed to read job file' });
+            return res.status(500).json({ error: 'Failed to read job metadata' });
         }
-    } else if (fs.existsSync(gzPath)) {
-        try {
-            const gzContent = fs.readFileSync(gzPath);
-            zlib.gunzip(gzContent, (err, buffer) => {
-                if (err) return res.status(500).json({ error: 'Failed to decompress job file' });
-                try {
-                    const job = JSON.parse(buffer.toString());
-                    res.json(job);
-                } catch (e) {
-                    res.status(500).json({ error: 'Failed to parse decompressed job file' });
-                }
-            });
-        } catch (e) {
-            res.status(500).json({ error: 'Failed to read compressed job file' });
-        }
-    } else {
-        res.status(404).json({ error: 'Job not found' });
     }
+
+    // Job not found in new format
+    res.status(404).json({ error: 'Job not found' });
 });
 
 // API: Stream Job Details (Server-Sent Events for progressive loading)
-app.get('/api/jobs/:id/stream', (req, res) => {
+app.get('/api/jobs/:id/stream', async (req, res) => {
     const { id } = req.params;
     // Support both header and query param (EventSource doesn't support custom headers)
     const currentSession = req.headers['x-session-id'] || req.query.session;
@@ -1082,28 +1157,41 @@ app.get('/api/jobs/:id/stream', (req, res) => {
         res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
-    const loadAndStreamJob = async (job) => {
-        // Send job metadata first (without results)
-        const metadata = {
-            id: job.id,
-            status: job.status,
-            config: job.config,
-            startTime: job.startTime,
-            session: job.session,
-            totalResults: job.results?.length || 0
-        };
-        sendEvent('metadata', metadata);
+    // Stream results from incremental format (new)
+    const streamIncrementalJob = async (meta) => {
+        // Send job metadata first
+        sendEvent('metadata', {
+            id: meta.id,
+            status: meta.status,
+            config: meta.config,
+            startTime: meta.startTime,
+            session: meta.session,
+            totalResults: meta.resultCount || 0
+        });
 
-        // Stream results in batches
-        if (job.results && job.results.length > 0) {
+        const resultCount = meta.resultCount || 0;
+        if (resultCount > 0) {
             const BATCH_SIZE = 50;
-            for (let i = 0; i < job.results.length; i += BATCH_SIZE) {
-                const batch = job.results.slice(i, i + BATCH_SIZE);
-                sendEvent('results', { 
-                    batch, 
-                    progress: Math.min(i + BATCH_SIZE, job.results.length),
-                    total: job.results.length 
-                });
+            for (let i = 0; i < resultCount; i += BATCH_SIZE) {
+                const batch = [];
+                const end = Math.min(i + BATCH_SIZE, resultCount);
+                
+                for (let j = i; j < end; j++) {
+                    try {
+                        const result = await loadResult(currentSession, id, j);
+                        batch.push(result);
+                    } catch (e) {
+                        console.error(`Failed to load result ${j} for job ${id}:`, e);
+                    }
+                }
+                
+                if (batch.length > 0) {
+                    sendEvent('results', { 
+                        batch, 
+                        progress: end,
+                        total: resultCount 
+                    });
+                }
                 
                 // Small delay to allow UI to update
                 await new Promise(resolve => setImmediate(resolve));
@@ -1115,50 +1203,163 @@ app.get('/api/jobs/:id/stream', (req, res) => {
         res.end();
     };
 
-    // Check memory first
+    // Check memory first (running jobs)
     if (jobs.has(id)) {
-        loadAndStreamJob(jobs.get(id));
+        const job = jobs.get(id);
+        // For running jobs, send current state
+        sendEvent('metadata', {
+            id: job.id,
+            status: job.status,
+            config: job.config,
+            startTime: job.startTime,
+            session: job.session,
+            totalResults: job.resultCount || 0
+        });
+        
+        // Stream saved results from disk
+        const resultCount = job.resultCount || 0;
+        if (resultCount > 0) {
+            const BATCH_SIZE = 50;
+            for (let i = 0; i < resultCount; i += BATCH_SIZE) {
+                const batch = [];
+                const end = Math.min(i + BATCH_SIZE, resultCount);
+                
+                for (let j = i; j < end; j++) {
+                    try {
+                        const result = await loadResult(currentSession, id, j);
+                        batch.push(result);
+                    } catch (e) {
+                        console.error(`Failed to load result ${j}:`, e);
+                    }
+                }
+                
+                if (batch.length > 0) {
+                    sendEvent('results', { batch, progress: end, total: resultCount });
+                }
+                
+                await new Promise(resolve => setImmediate(resolve));
+            }
+        }
+        
+        sendEvent('complete', { success: true });
+        res.end();
         return;
     }
 
-    // Check user's directory on disk
-    const userDir = getUserDir(currentSession);
-    const jsonPath = path.join(userDir, `${id}.json`);
-    const gzPath = path.join(userDir, `${id}.json.gz`);
+    // Check for new incremental format
+    if (isIncrementalJob(currentSession, id)) {
+        try {
+            const meta = await loadJobMeta(currentSession, id);
+            await streamIncrementalJob(meta);
+        } catch (e) {
+            sendEvent('error', { message: 'Failed to read job: ' + e.message });
+            res.end();
+        }
+        return;
+    }
 
-    if (fs.existsSync(jsonPath)) {
-        try {
-            const content = fs.readFileSync(jsonPath, 'utf8');
-            const job = JSON.parse(content);
-            loadAndStreamJob(job);
-        } catch (e) {
-            sendEvent('error', { message: 'Failed to read job file' });
-            res.end();
+    // Job not found
+    sendEvent('error', { message: 'Job not found' });
+    res.end();
+});
+
+// API: Export Job to compressed JSON (streaming, no memory issues)
+app.get('/api/jobs/:id/export', async (req, res) => {
+    const { id } = req.params;
+    const currentSession = req.headers['x-session-id'] || req.query.session;
+    
+    // Check for incremental format
+    if (!isIncrementalJob(currentSession, id)) {
+        return res.status(404).json({ error: 'Job not found or not in exportable format' });
+    }
+    
+    try {
+        const meta = await loadJobMeta(currentSession, id);
+        const resultCount = meta.resultCount || 0;
+        
+        // Set up response headers for gzip download
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        res.setHeader('Content-Type', 'application/gzip');
+        res.setHeader('Content-Disposition', `attachment; filename="backtest-results-${timestamp}.json.gz"`);
+        
+        // Create gzip stream
+        const gzip = zlib.createGzip();
+        gzip.pipe(res);
+        
+        // Write opening of JSON structure
+        gzip.write('{\n');
+        gzip.write(`  "exportVersion": "2.0",\n`);
+        gzip.write(`  "exportDate": "${new Date().toISOString()}",\n`);
+        gzip.write(`  "jobId": "${meta.id}",\n`);
+        gzip.write(`  "config": ${JSON.stringify(meta.config)},\n`);
+        gzip.write(`  "summary": {\n`);
+        gzip.write(`    "totalResults": ${resultCount},\n`);
+        gzip.write(`    "status": "${meta.status}"\n`);
+        gzip.write(`  },\n`);
+        gzip.write(`  "results": [\n`);
+        
+        // Stream results one by one
+        for (let i = 0; i < resultCount; i++) {
+            try {
+                const result = await loadResult(currentSession, id, i);
+                const prefix = i === 0 ? '    ' : ',\n    ';
+                gzip.write(prefix + JSON.stringify(result));
+            } catch (e) {
+                console.error(`Failed to export result ${i}:`, e);
+            }
+            
+            // Yield to event loop periodically
+            if (i % 100 === 0) {
+                await new Promise(resolve => setImmediate(resolve));
+            }
         }
-    } else if (fs.existsSync(gzPath)) {
-        try {
-            const gzContent = fs.readFileSync(gzPath);
-            zlib.gunzip(gzContent, (err, buffer) => {
-                if (err) {
-                    sendEvent('error', { message: 'Failed to decompress job file' });
-                    res.end();
-                    return;
-                }
-                try {
-                    const job = JSON.parse(buffer.toString());
-                    loadAndStreamJob(job);
-                } catch (e) {
-                    sendEvent('error', { message: 'Failed to parse decompressed job file' });
-                    res.end();
-                }
-            });
-        } catch (e) {
-            sendEvent('error', { message: 'Failed to read compressed job file' });
-            res.end();
+        
+        // Close JSON structure
+        gzip.write('\n  ]\n');
+        gzip.write('}\n');
+        gzip.end();
+        
+        console.log(`📦 Exported job ${id} with ${resultCount} results`);
+        
+    } catch (error) {
+        console.error('Export error:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ error: error.message });
         }
-    } else {
-        sendEvent('error', { message: 'Job not found' });
-        res.end();
+    }
+});
+
+// API: Get job file size estimate for export
+app.get('/api/jobs/:id/size', async (req, res) => {
+    const { id } = req.params;
+    const currentSession = req.headers['x-session-id'] || req.query.session;
+    
+    if (!isIncrementalJob(currentSession, id)) {
+        return res.status(404).json({ error: 'Job not found' });
+    }
+    
+    try {
+        const userDir = getUserDir(currentSession);
+        const jobDir = path.join(userDir, id);
+        const files = fs.readdirSync(jobDir);
+        
+        let totalSize = 0;
+        for (const file of files) {
+            const filePath = path.join(jobDir, file);
+            const stat = fs.statSync(filePath);
+            totalSize += stat.size;
+        }
+        
+        // Estimate uncompressed size (gzip typically compresses to ~30% of original)
+        const estimatedUncompressed = Math.round(totalSize * 3.3);
+        
+        res.json({
+            compressedSize: totalSize,
+            estimatedUncompressedSize: estimatedUncompressed,
+            resultCount: files.filter(f => f.match(/^\d+\.json\.gz$/)).length
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
 });
 

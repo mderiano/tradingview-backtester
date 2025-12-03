@@ -178,6 +178,10 @@
                         <span id="progressBarText" class="progress-text">0 / 0</span>
                         <span id="progressBarPercent" class="progress-percent">0%</span>
                     </div>
+                    <div class="progress-bar-footer" id="savedProgressContainer" style="margin-top: 0.25rem; display: none;">
+                        <span id="savedProgressText" class="progress-text" style="color: #4CAF50;">💾 Sauvegardé: 0 / 0</span>
+                        <span id="savedProgressCheck" style="color: #4CAF50;">✓</span>
+                    </div>
                 </div>
 
                 <div id="statusMessage" class="status-message"></div>
@@ -297,7 +301,7 @@
                 <h2 data-i18n="modal.historyTitle">Backtest History</h2>
                 <div style="display: flex; gap: 0.5rem; align-items: center;">
                     <button id="importResultsBtn" class="btn secondary small" data-i18n="buttons.importResults">📤 Import Results</button>
-                    <input type="file" id="importResultsFile" accept=".json" style="display: none;">
+                    <input type="file" id="importResultsFile" accept=".json,.json.gz,.gz" style="display: none;">
                     <button class="close-btn" id="closeHistoryBtn">&times;</button>
                 </div>
             </div>
