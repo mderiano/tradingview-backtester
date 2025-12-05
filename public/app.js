@@ -2408,7 +2408,7 @@ async function handleImportResults(event) {
     try {
         updateStatus('📤 ' + i18n.t('messages.importingResults'), 'info');
 
-        let text;
+        let imported;
         
         // Check if file is gzip compressed
         if (file.name.endsWith('.gz')) {
@@ -2423,28 +2423,24 @@ async function handleImportResults(event) {
                 try {
                     updateStatus('📤 Décompression en cours...', 'info');
                     
-                    // For large files, decompress to Uint8Array first, then decode in chunks
+                    // Decompress to Uint8Array
                     const decompressedData = pako.inflate(uint8Array);
                     console.log('Decompressed to Uint8Array, length:', decompressedData.length);
                     
-                    // Decode in chunks to avoid string length limit
-                    updateStatus('📤 Décodage du texte...', 'info');
-                    const decoder = new TextDecoder('utf-8');
-                    const CHUNK_SIZE = 64 * 1024 * 1024; // 64MB chunks
-                    const textChunks = [];
-                    
-                    for (let i = 0; i < decompressedData.length; i += CHUNK_SIZE) {
-                        const chunk = decompressedData.subarray(i, Math.min(i + CHUNK_SIZE, decompressedData.length));
-                        const isLast = (i + CHUNK_SIZE >= decompressedData.length);
-                        textChunks.push(decoder.decode(chunk, { stream: !isLast }));
+                    // For very large files (>500MB decompressed), use streaming JSON parse
+                    if (decompressedData.length > 500 * 1024 * 1024) {
+                        updateStatus('📤 Parsing JSON (fichier volumineux)...', 'info');
+                        imported = await parseJsonFromUint8Array(decompressedData);
+                    } else {
+                        // For smaller files, decode normally
+                        updateStatus('📤 Décodage du texte...', 'info');
+                        const decoder = new TextDecoder('utf-8');
+                        const text = decoder.decode(decompressedData);
+                        console.log('Decoded text length:', text.length);
                         
-                        // Progress update
-                        const progress = Math.round((i / decompressedData.length) * 100);
-                        updateStatus(`📤 Décodage: ${progress}%`, 'info');
+                        updateStatus('📤 Parsing JSON...', 'info');
+                        imported = JSON.parse(text);
                     }
-                    
-                    text = textChunks.join('');
-                    console.log('Decoded text length:', text.length);
                 } catch (pakoError) {
                     console.error('Pako decompression failed:', pakoError);
                     throw new Error('Gzip decompression failed: ' + pakoError.message);
@@ -2453,16 +2449,13 @@ async function handleImportResults(event) {
                 throw new Error('Pako library not loaded. Please refresh the page.');
             }
         } else {
-            text = await file.text();
+            const text = await file.text();
+            imported = JSON.parse(text);
         }
         
-        if (!text || text.length === 0) {
-            throw new Error('Decompressed file is empty');
+        if (!imported) {
+            throw new Error('Failed to parse file');
         }
-        
-        console.log('Parsing JSON, first 200 chars:', text.substring(0, 200));
-        updateStatus('📤 Parsing JSON...', 'info');
-        const imported = JSON.parse(text);
 
         validateImportedResults(imported);
 
@@ -2475,6 +2468,129 @@ async function handleImportResults(event) {
         updateStatus('❌ ' + i18n.t('errors.importFailed', { error: error.message }), 'error');
         event.target.value = '';
     }
+}
+
+// Parse JSON from Uint8Array for very large files (>500MB)
+// Uses chunked decoding to avoid string length limits
+async function parseJsonFromUint8Array(uint8Array) {
+    const decoder = new TextDecoder('utf-8');
+    
+    // Find the results array boundaries to parse header separately
+    // Look for "results": [ pattern
+    const searchPattern = '"results":';
+    const patternBytes = new TextEncoder().encode(searchPattern);
+    
+    // Find pattern position (search in first 10KB which contains header)
+    const headerSearchSize = Math.min(10240, uint8Array.length);
+    const headerText = decoder.decode(uint8Array.subarray(0, headerSearchSize));
+    const resultsIndex = headerText.indexOf('"results"');
+    
+    if (resultsIndex === -1) {
+        throw new Error('Invalid JSON structure: results array not found');
+    }
+    
+    // Find the opening bracket of results array
+    const afterResults = headerText.indexOf('[', resultsIndex);
+    if (afterResults === -1) {
+        throw new Error('Invalid JSON structure: results array bracket not found');
+    }
+    
+    // Parse header (everything before results array content)
+    const headerEnd = afterResults + 1;
+    const headerJson = headerText.substring(0, resultsIndex) + '"results": []}';
+    
+    let parsed;
+    try {
+        // Fix the header JSON to be valid
+        const fixedHeader = headerText.substring(0, afterResults + 1) + ']}';
+        // Find last valid JSON by removing trailing content
+        const lastBrace = fixedHeader.lastIndexOf('}');
+        const validHeader = fixedHeader.substring(0, lastBrace + 1);
+        parsed = JSON.parse(validHeader.replace('"results": []', '"results":[]'));
+    } catch (e) {
+        // Fallback: create minimal structure
+        parsed = {
+            exportVersion: '2.0',
+            exportDate: new Date().toISOString(),
+            results: []
+        };
+    }
+    
+    // Now parse results array in chunks
+    updateStatus('📤 Parsing résultats...', 'info');
+    
+    // Decode the entire array content in manageable chunks and parse objects
+    const CHUNK_SIZE = 50 * 1024 * 1024; // 50MB chunks for decoding
+    const results = [];
+    let buffer = '';
+    let braceCount = 0;
+    let inObject = false;
+    let objectStart = 0;
+    let processedBytes = headerEnd;
+    let lastProgress = 0;
+    
+    // Convert bytes to string position (approximate, assuming mostly ASCII)
+    const textDecoder = new TextDecoder('utf-8');
+    
+    while (processedBytes < uint8Array.length) {
+        const chunkEnd = Math.min(processedBytes + CHUNK_SIZE, uint8Array.length);
+        const chunk = textDecoder.decode(uint8Array.subarray(processedBytes, chunkEnd), { stream: chunkEnd < uint8Array.length });
+        
+        buffer += chunk;
+        
+        // Parse complete objects from buffer
+        let i = 0;
+        while (i < buffer.length) {
+            const char = buffer[i];
+            
+            if (char === '{' && !inObject) {
+                inObject = true;
+                objectStart = i;
+                braceCount = 1;
+            } else if (inObject) {
+                if (char === '{') braceCount++;
+                else if (char === '}') {
+                    braceCount--;
+                    if (braceCount === 0) {
+                        // Complete object found
+                        const objectStr = buffer.substring(objectStart, i + 1);
+                        try {
+                            const obj = JSON.parse(objectStr);
+                            results.push(obj);
+                        } catch (e) {
+                            console.warn('Failed to parse object:', e);
+                        }
+                        inObject = false;
+                        objectStart = i + 1;
+                    }
+                }
+            }
+            i++;
+        }
+        
+        // Keep unparsed content in buffer
+        if (inObject) {
+            buffer = buffer.substring(objectStart);
+            objectStart = 0;
+        } else {
+            buffer = '';
+        }
+        
+        processedBytes = chunkEnd;
+        
+        // Progress update
+        const progress = Math.round((processedBytes / uint8Array.length) * 100);
+        if (progress > lastProgress + 5) {
+            updateStatus(`📤 Parsing: ${progress}% (${results.length} résultats)`, 'info');
+            lastProgress = progress;
+            await new Promise(r => setTimeout(r, 0)); // Allow UI update
+        }
+    }
+    
+    parsed.results = results;
+    console.log('Parsed', results.length, 'results from large file');
+    
+    return parsed;
 }
 
 // Validate imported results structure
