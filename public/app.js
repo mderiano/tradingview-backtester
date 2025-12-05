@@ -2374,9 +2374,98 @@ async function exportResultsJSON() {
         }
         
         // Fallback: client-side export (for results loaded in memory)
+        // Only for small datasets - large ones should use server streaming
         if (!state.results || state.results.length === 0) {
             alert(i18n.t('errors.noResults'));
             return;
+        }
+        
+        // For large datasets, warn user and suggest using history modal
+        if (state.results.length > 500) {
+            updateStatus('⚠️ Export de ' + state.results.length + ' résultats, utilisation du streaming...', 'info');
+            
+            // Try to use streaming if we have a job ID
+            if (state.currentJobId) {
+                // Try to save current results to server first, then stream export
+                try {
+                    const saveResponse = await fetch(`/api/jobs/${state.currentJobId}/save-results`, {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'X-Session-Id': session
+                        },
+                        body: JSON.stringify({ 
+                            results: state.results.slice(0, 100), // Only send first batch to trigger incremental save
+                            session: session 
+                        })
+                    });
+                } catch (e) {
+                    console.log('Could not save to server:', e);
+                }
+            }
+            
+            // For very large datasets, export in chunks using Blob streaming
+            try {
+                updateStatus('📦 Export par chunks en cours...', 'info');
+                
+                // Build JSON in chunks to avoid string length limit
+                const chunks = [];
+                const header = JSON.stringify({
+                    exportVersion: '2.0',
+                    exportDate: new Date().toISOString(),
+                    jobId: state.currentJobId,
+                    config: {
+                        indicatorId: state.indicatorId,
+                        symbols: state.symbols,
+                        timeframes: Array.from(document.querySelectorAll('input[name="timeframe"]:checked')).map(cb => cb.value),
+                        dateFrom: dateFromInput.value,
+                        dateTo: dateToInput.value
+                    },
+                    summary: {
+                        totalResults: state.results.length,
+                        status: 'exported'
+                    },
+                    results: []
+                }).slice(0, -2); // Remove closing ]}
+                
+                chunks.push(header);
+                
+                // Add results one by one
+                for (let i = 0; i < state.results.length; i++) {
+                    const resultJson = JSON.stringify(state.results[i]);
+                    if (i > 0) chunks.push(',');
+                    chunks.push(resultJson);
+                    
+                    // Progress update every 500 results
+                    if (i % 500 === 0) {
+                        updateStatus(`📦 Export: ${i}/${state.results.length} résultats...`, 'info');
+                        await new Promise(r => setTimeout(r, 0)); // Allow UI update
+                    }
+                }
+                
+                chunks.push(']}'); // Close results array and main object
+                
+                const blob = new Blob(chunks, { type: 'application/json' });
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+                const filename = `backtest-results-${timestamp}.json`;
+                
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                updateStatus('✅ ' + i18n.t('messages.resultsExported', { filename, count: state.results.length }), 'success');
+                setTimeout(() => statusMessage.textContent = '', 3000);
+                return;
+            } catch (chunkError) {
+                console.error('Chunk export failed:', chunkError);
+                updateStatus('❌ Export échoué - données trop volumineuses. Utilisez l\'historique pour exporter.', 'error');
+                return;
+            }
         }
         
         updateStatus('📦 Export client-side en cours...', 'info');
@@ -2423,13 +2512,123 @@ async function exportResultsJSON() {
 
 // Export results to Excel (wrapper for existing functionality)
 async function exportResultsExcel() {
+    const syncData = getSyncData();
+    const session = syncData?.session || '';
+    
+    // Check if we have a job on the server first (for large datasets)
+    if (state.currentJobId) {
+        try {
+            const sizeResponse = await fetch(`/api/jobs/${state.currentJobId}/size?session=${encodeURIComponent(session)}`, {
+                headers: { 'X-Session-Id': session }
+            });
+            
+            if (sizeResponse.ok) {
+                const sizeInfo = await sizeResponse.json();
+                updateStatus(`📊 Génération Excel de ${sizeInfo.resultCount} résultats via streaming...`, 'info');
+                
+                // Use streaming export endpoint for Excel
+                const exportUrl = `/api/jobs/${state.currentJobId}/export-excel?session=${encodeURIComponent(session)}`;
+                
+                const response = await fetch(exportUrl, {
+                    headers: { 'X-Session-Id': session }
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `backtest-results-${new Date().toISOString().slice(0, 10)}.xlsx`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    
+                    updateStatus('✅ ' + i18n.t('messages.excelDownloaded'), 'success');
+                    setTimeout(() => statusMessage.textContent = '', 3000);
+                    return;
+                }
+            }
+        } catch (e) {
+            console.log('Server streaming Excel failed, trying client-side:', e);
+        }
+    }
+    
+    // Fallback to client-side export
     if (!state.results || state.results.length === 0) {
         alert(i18n.t('errors.noResults'));
         return;
     }
 
+    // For very large datasets, warn the user
+    if (state.results.length > 1000) {
+        updateStatus(`⚠️ Export Excel de ${state.results.length} résultats - cela peut prendre du temps...`, 'info');
+    }
+
     try {
         updateStatus('📊 ' + i18n.t('messages.generatingExcel'), 'info');
+
+        // For large datasets, send in batches to avoid memory issues
+        if (state.results.length > 500) {
+            // Use FormData with chunked approach
+            const BATCH_SIZE = 500;
+            const batches = [];
+            for (let i = 0; i < state.results.length; i += BATCH_SIZE) {
+                batches.push(state.results.slice(i, i + BATCH_SIZE));
+            }
+            
+            updateStatus(`📊 Envoi de ${batches.length} lots au serveur...`, 'info');
+            
+            // Send first batch to create the job, then append
+            const firstBatchResponse = await fetch('/api/export-batch-start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    results: batches[0],
+                    totalBatches: batches.length,
+                    session: session
+                })
+            });
+            
+            if (!firstBatchResponse.ok) {
+                // Fall back to single request
+                throw new Error('Batch export not supported');
+            }
+            
+            const { exportId } = await firstBatchResponse.json();
+            
+            // Send remaining batches
+            for (let i = 1; i < batches.length; i++) {
+                updateStatus(`📊 Envoi lot ${i + 1}/${batches.length}...`, 'info');
+                await fetch('/api/export-batch-append', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        exportId,
+                        results: batches[i],
+                        batchIndex: i
+                    })
+                });
+            }
+            
+            // Get final Excel
+            const response = await fetch(`/api/export-batch-finish/${exportId}`);
+            if (!response.ok) throw new Error('Export finish failed');
+            
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `backtest-results-${new Date().toISOString().slice(0, 10)}.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            updateStatus('✅ ' + i18n.t('messages.excelDownloaded'), 'success');
+            setTimeout(() => statusMessage.textContent = '', 3000);
+            return;
+        }
 
         const response = await fetch('/api/export', {
             method: 'POST',
@@ -2589,55 +2788,40 @@ function applyImportedResults(imported) {
     }, 100);
 }
 
-// Export a specific job by ID (from history)
+// Export a specific job by ID (from history) - uses streaming server endpoint
 async function exportHistoryJobJSON(jobId) {
     try {
         updateStatus('📥 Exporting job...', 'info');
 
         const syncData = getSyncData();
-        const session = syncData?.session || 'anonymous';
+        const session = syncData?.session || '';
 
-        const response = await fetch(`/api/jobs/${jobId}`, {
-            headers: { 'X-Session-ID': session }
+        // Check if job exists and get size estimate
+        const sizeResponse = await fetch(`/api/jobs/${jobId}/size?session=${encodeURIComponent(session)}`, {
+            headers: { 'X-Session-Id': session }
         });
 
-        if (!response.ok) {
-            throw new Error('Failed to load job');
+        if (sizeResponse.ok) {
+            // Job exists in incremental format - use streaming export
+            const sizeInfo = await sizeResponse.json();
+            const sizeMB = (sizeInfo.compressedSize / (1024 * 1024)).toFixed(2);
+            updateStatus(`📦 Export en cours... (~${sizeMB} MB compressé, ${sizeInfo.resultCount} résultats)`, 'info');
+
+            // Download the compressed export directly
+            const exportUrl = `/api/jobs/${jobId}/export?session=${encodeURIComponent(session)}`;
+
+            const a = document.createElement('a');
+            a.href = exportUrl;
+            a.download = ''; // Let server set filename
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            updateStatus(`✅ Job exported (${sizeInfo.resultCount} results)`, 'success');
+            setTimeout(() => statusMessage.textContent = '', 3000);
+        } else {
+            throw new Error('Job not found or not in exportable format');
         }
-
-        const job = await response.json();
-
-        const exportData = {
-            version: '1.0.0',
-            exportDate: new Date().toISOString(),
-            jobId: job.id,
-            // NOTE: session is NOT exported for security reasons
-            config: job.config,
-            results: job.results || [],
-            summary: {
-                totalResults: job.results?.length || 0,
-                successCount: job.results?.filter(r => !r.error).length || 0,
-                errorCount: job.results?.filter(r => r.error).length || 0,
-                totalTrades: job.results?.reduce((sum, r) => sum + (r.report?.totalClosedTrades || 0), 0) || 0
-            }
-        };
-
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-        const filename = `backtest-results-${jobId.substring(0, 8)}-${timestamp}.json`;
-        const jsonString = JSON.stringify(exportData, null, 2);
-
-        const blob = new Blob([jsonString], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        updateStatus(`✅ Job exported to ${filename}`, 'success');
-        setTimeout(() => statusMessage.textContent = '', 3000);
 
     } catch (error) {
         console.error('Export history job error:', error);
@@ -2645,28 +2829,27 @@ async function exportHistoryJobJSON(jobId) {
     }
 }
 
-// Export a specific job as Excel (from history)
+// Export a specific job as Excel (from history) - uses streaming to load results
 async function exportHistoryJobExcel(jobId) {
     try {
         updateStatus('📊 ' + i18n.t('messages.generatingExcel'), 'info');
 
         const syncData = getSyncData();
-        const session = syncData?.session || 'anonymous';
+        const session = syncData?.session || '';
 
-        const response = await fetch(`/api/jobs/${jobId}`, {
-            headers: { 'X-Session-ID': session }
-        });
+        // Load results via streaming endpoint
+        const results = await loadJobResultsForExport(jobId, session);
 
-        if (!response.ok) {
-            throw new Error('Failed to load job');
+        if (!results || results.length === 0) {
+            throw new Error('No results to export');
         }
 
-        const job = await response.json();
+        updateStatus(`📊 Generating Excel (${results.length} results)...`, 'info');
 
         const exportResponse = await fetch('/api/export', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ results: job.results || [] })
+            body: JSON.stringify({ results })
         });
 
         if (!exportResponse.ok) {
@@ -2690,6 +2873,39 @@ async function exportHistoryJobExcel(jobId) {
         console.error('Export history job Excel error:', error);
         updateStatus('❌ ' + i18n.t('errors.exportFailed', { error: error.message }), 'error');
     }
+}
+
+// Helper: Load job results via streaming for export (avoids memory issues with large jobs)
+async function loadJobResultsForExport(jobId, session) {
+    return new Promise((resolve, reject) => {
+        const results = [];
+        const sessionParam = session ? `?session=${encodeURIComponent(session)}` : '';
+        const eventSource = new EventSource(`/api/jobs/${jobId}/stream${sessionParam}`);
+
+        eventSource.addEventListener('results', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                data.batch.forEach(result => results.push(result));
+            } catch (e) {
+                console.error('Error parsing results:', e);
+            }
+        });
+
+        eventSource.addEventListener('complete', () => {
+            eventSource.close();
+            resolve(results);
+        });
+
+        eventSource.addEventListener('error', (event) => {
+            eventSource.close();
+            reject(new Error('Failed to load job results'));
+        });
+
+        eventSource.onerror = () => {
+            eventSource.close();
+            reject(new Error('Connection error'));
+        };
+    });
 }
 
 

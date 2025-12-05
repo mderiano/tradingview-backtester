@@ -1363,6 +1363,89 @@ app.get('/api/jobs/:id/size', async (req, res) => {
     }
 });
 
+// API: Stream export job to Excel (for large datasets)
+app.get('/api/jobs/:id/export-excel', async (req, res) => {
+    const { id } = req.params;
+    const currentSession = req.headers['x-session-id'] || req.query.session;
+    
+    if (!isIncrementalJob(currentSession, id)) {
+        return res.status(404).json({ error: 'Job not found or not in exportable format' });
+    }
+    
+    try {
+        const meta = await loadJobMeta(currentSession, id);
+        const resultCount = meta.resultCount || 0;
+        
+        console.log(`📊 Starting Excel export for job ${id} with ${resultCount} results`);
+        
+        const workbook = new ExcelJS.Workbook();
+        const sheet = workbook.addWorksheet('Backtest Results');
+        
+        // Define columns
+        sheet.columns = [
+            { header: 'Symbol', key: 'symbol', width: 15 },
+            { header: 'Timeframe', key: 'timeframe', width: 10 },
+            { header: 'Options', key: 'options', width: 40 },
+            { header: 'Net Profit', key: 'netProfit', width: 15 },
+            { header: 'Total Trades', key: 'totalClosedTrades', width: 15 },
+            { header: '% Profitable', key: 'percentProfitable', width: 15 },
+            { header: 'Profit Factor', key: 'profitFactor', width: 15 },
+            { header: 'Max Drawdown', key: 'maxDrawdown', width: 15 },
+            { header: 'Avg Trade', key: 'avgTrade', width: 15 },
+            { header: 'Sharpe Ratio', key: 'sharpeRatio', width: 15 },
+            { header: 'Sortino Ratio', key: 'sortinoRatio', width: 15 },
+            { header: 'Avg Bars in Trade', key: 'avgBarsInTrade', width: 15 }
+        ];
+        
+        // Style header
+        sheet.getRow(1).font = { bold: true };
+        
+        // Load and add results in batches
+        for (let i = 0; i < resultCount; i++) {
+            try {
+                const result = await loadResult(currentSession, id, i);
+                const row = {
+                    symbol: result.symbol,
+                    timeframe: result.timeframe,
+                    options: result.optionsStr || JSON.stringify(result.options || {}),
+                    netProfit: result.results?.netProfit,
+                    totalClosedTrades: result.results?.totalClosedTrades,
+                    percentProfitable: result.results?.percentProfitable,
+                    profitFactor: result.results?.profitFactor,
+                    maxDrawdown: result.results?.maxDrawdown,
+                    avgTrade: result.results?.avgTrade,
+                    sharpeRatio: result.results?.sharpeRatio,
+                    sortinoRatio: result.results?.sortinoRatio,
+                    avgBarsInTrade: result.results?.avgBarsInTrade
+                };
+                sheet.addRow(row);
+            } catch (e) {
+                console.error(`Failed to add result ${i} to Excel:`, e);
+            }
+            
+            // Log progress every 500 results
+            if (i > 0 && i % 500 === 0) {
+                console.log(`📊 Excel export progress: ${i}/${resultCount}`);
+                // Yield to event loop
+                await new Promise(resolve => setImmediate(resolve));
+            }
+        }
+        
+        const timestamp = new Date().toISOString().slice(0, 10);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="backtest-results-${timestamp}.xlsx"`);
+        
+        await workbook.xlsx.write(res);
+        console.log(`📊 Excel export completed for job ${id}`);
+        
+    } catch (error) {
+        console.error('Excel export error:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ error: error.message });
+        }
+    }
+});
+
 // API: Export to Excel
 app.post('/api/export', async (req, res) => {
     try {
