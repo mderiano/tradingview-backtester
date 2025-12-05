@@ -455,9 +455,6 @@ async function handleLoadJob(jobId, button) {
         // Close modal immediately to show results as they stream in
         historyModal.classList.add('hidden');
 
-        // Scroll to results section immediately
-        step3.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
         // Use streaming endpoint
         await loadJobWithStreaming(jobId);
 
@@ -504,7 +501,12 @@ async function loadJobWithStreaming(jobId) {
                 step3.classList.remove('hidden');
                 historyBtn.classList.remove('hidden');
                 resultsTableBody.innerHTML = '';
-                
+
+                // Scroll to results section now that it's visible
+                setTimeout(() => {
+                    step3.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }, 100);
+
                 // Show progress
                 if (jobMetadata.totalResults > 0) {
                     statusMessage.textContent = i18n.t('messages.loadingResults', { progress: 0, total: jobMetadata.totalResults });
