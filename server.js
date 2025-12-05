@@ -260,6 +260,27 @@ function countJobResults(session, jobId) {
     }
 }
 
+// List all result files in a job directory (returns sorted array of indices)
+function listJobResultFiles(session, jobId) {
+    const userDir = getUserDir(session);
+    const jobDir = path.join(userDir, jobId);
+    
+    if (!fs.existsSync(jobDir)) return [];
+    
+    try {
+        const files = fs.readdirSync(jobDir);
+        // Extract numeric indices from filenames like "0.json.gz", "1.json.gz", etc.
+        const indices = files
+            .filter(f => f.match(/^\d+\.json\.gz$/))
+            .map(f => parseInt(f.replace('.json.gz', ''), 10))
+            .sort((a, b) => a - b);
+        return indices;
+    } catch (e) {
+        console.error(`Error listing job result files for ${jobId}:`, e);
+        return [];
+    }
+}
+
 // Load job index for a specific user
 function loadJobIndex(session) {
     try {
@@ -1159,6 +1180,10 @@ app.get('/api/jobs/:id/stream', async (req, res) => {
 
     // Stream results from incremental format (new)
     const streamIncrementalJob = async (meta) => {
+        // Get actual result file indices from disk
+        const resultIndices = listJobResultFiles(currentSession, id);
+        const totalResults = resultIndices.length;
+        
         // Send job metadata first
         sendEvent('metadata', {
             id: meta.id,
@@ -1166,22 +1191,22 @@ app.get('/api/jobs/:id/stream', async (req, res) => {
             config: meta.config,
             startTime: meta.startTime,
             session: meta.session,
-            totalResults: meta.resultCount || 0
+            totalResults: totalResults
         });
 
-        const resultCount = meta.resultCount || 0;
-        if (resultCount > 0) {
+        if (totalResults > 0) {
             const BATCH_SIZE = 50;
-            for (let i = 0; i < resultCount; i += BATCH_SIZE) {
+            for (let i = 0; i < totalResults; i += BATCH_SIZE) {
                 const batch = [];
-                const end = Math.min(i + BATCH_SIZE, resultCount);
+                const end = Math.min(i + BATCH_SIZE, totalResults);
                 
                 for (let j = i; j < end; j++) {
+                    const resultIndex = resultIndices[j];
                     try {
-                        const result = await loadResult(currentSession, id, j);
+                        const result = await loadResult(currentSession, id, resultIndex);
                         batch.push(result);
                     } catch (e) {
-                        console.error(`Failed to load result ${j} for job ${id}:`, e);
+                        console.error(`Failed to load result ${resultIndex} for job ${id}:`, e);
                     }
                 }
                 
@@ -1189,7 +1214,7 @@ app.get('/api/jobs/:id/stream', async (req, res) => {
                     sendEvent('results', { 
                         batch, 
                         progress: end,
-                        total: resultCount 
+                        total: totalResults 
                     });
                 }
                 
@@ -1206,6 +1231,11 @@ app.get('/api/jobs/:id/stream', async (req, res) => {
     // Check memory first (running jobs)
     if (jobs.has(id)) {
         const job = jobs.get(id);
+        
+        // Get actual result file indices from disk
+        const resultIndices = listJobResultFiles(currentSession, id);
+        const totalResults = resultIndices.length;
+        
         // For running jobs, send current state
         sendEvent('metadata', {
             id: job.id,
@@ -1213,28 +1243,28 @@ app.get('/api/jobs/:id/stream', async (req, res) => {
             config: job.config,
             startTime: job.startTime,
             session: job.session,
-            totalResults: job.resultCount || 0
+            totalResults: totalResults
         });
         
         // Stream saved results from disk
-        const resultCount = job.resultCount || 0;
-        if (resultCount > 0) {
+        if (totalResults > 0) {
             const BATCH_SIZE = 50;
-            for (let i = 0; i < resultCount; i += BATCH_SIZE) {
+            for (let i = 0; i < totalResults; i += BATCH_SIZE) {
                 const batch = [];
-                const end = Math.min(i + BATCH_SIZE, resultCount);
+                const end = Math.min(i + BATCH_SIZE, totalResults);
                 
                 for (let j = i; j < end; j++) {
+                    const resultIndex = resultIndices[j];
                     try {
-                        const result = await loadResult(currentSession, id, j);
+                        const result = await loadResult(currentSession, id, resultIndex);
                         batch.push(result);
                     } catch (e) {
-                        console.error(`Failed to load result ${j}:`, e);
+                        console.error(`Failed to load result ${resultIndex}:`, e);
                     }
                 }
                 
                 if (batch.length > 0) {
-                    sendEvent('results', { batch, progress: end, total: resultCount });
+                    sendEvent('results', { batch, progress: end, total: totalResults });
                 }
                 
                 await new Promise(resolve => setImmediate(resolve));
@@ -1275,7 +1305,12 @@ app.get('/api/jobs/:id/export', async (req, res) => {
     
     try {
         const meta = await loadJobMeta(currentSession, id);
-        const resultCount = meta.resultCount || 0;
+        
+        // Get actual result file indices from disk (not from meta.resultCount which may be stale)
+        const resultIndices = listJobResultFiles(currentSession, id);
+        const totalResults = resultIndices.length;
+        
+        console.log(`📦 Starting export for job ${id}: ${totalResults} results found on disk (meta says ${meta.resultCount || 0})`);
         
         // Set up response headers for gzip download
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
@@ -1293,19 +1328,22 @@ app.get('/api/jobs/:id/export', async (req, res) => {
         gzip.write(`  "jobId": "${meta.id}",\n`);
         gzip.write(`  "config": ${JSON.stringify(meta.config)},\n`);
         gzip.write(`  "summary": {\n`);
-        gzip.write(`    "totalResults": ${resultCount},\n`);
+        gzip.write(`    "totalResults": ${totalResults},\n`);
         gzip.write(`    "status": "${meta.status}"\n`);
         gzip.write(`  },\n`);
         gzip.write(`  "results": [\n`);
         
-        // Stream results one by one
-        for (let i = 0; i < resultCount; i++) {
+        // Stream results one by one using actual file indices
+        let exportedCount = 0;
+        for (let i = 0; i < totalResults; i++) {
+            const resultIndex = resultIndices[i];
             try {
-                const result = await loadResult(currentSession, id, i);
-                const prefix = i === 0 ? '    ' : ',\n    ';
+                const result = await loadResult(currentSession, id, resultIndex);
+                const prefix = exportedCount === 0 ? '    ' : ',\n    ';
                 gzip.write(prefix + JSON.stringify(result));
+                exportedCount++;
             } catch (e) {
-                console.error(`Failed to export result ${i}:`, e);
+                console.error(`Failed to export result ${resultIndex}:`, e);
             }
             
             // Yield to event loop periodically
@@ -1319,7 +1357,7 @@ app.get('/api/jobs/:id/export', async (req, res) => {
         gzip.write('}\n');
         gzip.end();
         
-        console.log(`📦 Exported job ${id} with ${resultCount} results`);
+        console.log(`📦 Exported job ${id} with ${exportedCount} results`);
         
     } catch (error) {
         console.error('Export error:', error);
@@ -1374,9 +1412,12 @@ app.get('/api/jobs/:id/export-excel', async (req, res) => {
     
     try {
         const meta = await loadJobMeta(currentSession, id);
-        const resultCount = meta.resultCount || 0;
         
-        console.log(`📊 Starting Excel export for job ${id} with ${resultCount} results`);
+        // Get actual result file indices from disk
+        const resultIndices = listJobResultFiles(currentSession, id);
+        const totalResults = resultIndices.length;
+        
+        console.log(`📊 Starting Excel export for job ${id} with ${totalResults} results (meta says ${meta.resultCount || 0})`);
         
         const workbook = new ExcelJS.Workbook();
         const sheet = workbook.addWorksheet('Backtest Results');
@@ -1400,10 +1441,11 @@ app.get('/api/jobs/:id/export-excel', async (req, res) => {
         // Style header
         sheet.getRow(1).font = { bold: true };
         
-        // Load and add results in batches
-        for (let i = 0; i < resultCount; i++) {
+        // Load and add results using actual file indices
+        for (let i = 0; i < totalResults; i++) {
+            const resultIndex = resultIndices[i];
             try {
-                const result = await loadResult(currentSession, id, i);
+                const result = await loadResult(currentSession, id, resultIndex);
                 const row = {
                     symbol: result.symbol,
                     timeframe: result.timeframe,
@@ -1420,12 +1462,12 @@ app.get('/api/jobs/:id/export-excel', async (req, res) => {
                 };
                 sheet.addRow(row);
             } catch (e) {
-                console.error(`Failed to add result ${i} to Excel:`, e);
+                console.error(`Failed to add result ${resultIndex} to Excel:`, e);
             }
             
             // Log progress every 500 results
             if (i > 0 && i % 500 === 0) {
-                console.log(`📊 Excel export progress: ${i}/${resultCount}`);
+                console.log(`📊 Excel export progress: ${i}/${totalResults}`);
                 // Yield to event loop
                 await new Promise(resolve => setImmediate(resolve));
             }
