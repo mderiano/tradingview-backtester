@@ -481,12 +481,15 @@ async function loadJobWithStreaming(jobId) {
         let jobMetadata = null;
         let allResults = [];
         
+        // Set currentJobId immediately so export works even during loading
+        state.currentJobId = jobId;
+        
         eventSource.addEventListener('metadata', (event) => {
             try {
                 jobMetadata = JSON.parse(event.data);
                 
                 // Initialize UI with metadata
-                state.currentJobId = jobMetadata.id;
+                state.currentJobId = jobMetadata.id || jobId; // Use jobId as fallback
                 state.results = [];
                 
                 // Restore config if available
@@ -545,9 +548,10 @@ async function loadJobWithStreaming(jobId) {
                 }
             }
             
-            // Save ID to local storage
+            // Save ID to local storage and state
             localStorage.setItem('currentJobId', jobId);
-            resetButtons();
+            state.currentJobId = jobId; // Keep the jobId for export
+            resetButtonsKeepJob(); // Don't clear currentJobId
             
             resolve();
         });
@@ -2009,6 +2013,15 @@ function resetButtons() {
     hideProgressBar();
 }
 
+// Reset buttons but keep the currentJobId (for loaded jobs)
+function resetButtonsKeepJob() {
+    runBacktestBtn.disabled = false;
+    runBacktestBtn.textContent = i18n.t('buttons.runBacktest');
+    stopBacktestBtn.classList.add('hidden');
+    // Don't clear currentJobId - we need it for export
+    hideProgressBar();
+}
+
 // Progress bar functions
 function updateProgressBar(percent, current, total) {
     const progressContainer = document.getElementById('progressBarContainer');
@@ -2341,165 +2354,46 @@ async function exportResultsJSON() {
         const syncData = getSyncData();
         const session = syncData?.session || '';
         
-        // Try server-side streaming export first (for incremental format jobs)
+        // Always use server-side streaming export (same as history modal)
         if (state.currentJobId) {
-            const sizeResponse = await fetch(`/api/jobs/${state.currentJobId}/size?session=${encodeURIComponent(session)}`, {
-                headers: { 'X-Session-Id': session }
-            });
-            
-            if (sizeResponse.ok) {
-                // Job exists on server in incremental format - use streaming export
-                const sizeInfo = await sizeResponse.json();
-                const sizeMB = (sizeInfo.compressedSize / (1024 * 1024)).toFixed(2);
-                updateStatus(`📦 Export en cours... (~${sizeMB} MB compressé, ${sizeInfo.resultCount} résultats)`, 'info');
-                
-                // Download the compressed export directly
-                const exportUrl = `/api/jobs/${state.currentJobId}/export?session=${encodeURIComponent(session)}`;
-                
-                const a = document.createElement('a');
-                a.href = exportUrl;
-                a.download = ''; // Let server set filename
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-
-                updateStatus('✅ ' + i18n.t('messages.resultsExported', { filename: 'backtest-results.json.gz', count: sizeInfo.resultCount }), 'success');
-                setTimeout(() => statusMessage.textContent = '', 3000);
-                return;
-            }
-        }
-        
-        // Fallback: client-side export (for results loaded in memory)
-        // Only for small datasets - large ones should use server streaming
-        if (!state.results || state.results.length === 0) {
-            alert(i18n.t('errors.noResults'));
-            return;
-        }
-        
-        // For large datasets, warn user and suggest using history modal
-        if (state.results.length > 500) {
-            updateStatus('⚠️ Export de ' + state.results.length + ' résultats, utilisation du streaming...', 'info');
-            
-            // Try to use streaming if we have a job ID
-            if (state.currentJobId) {
-                // Try to save current results to server first, then stream export
-                try {
-                    const saveResponse = await fetch(`/api/jobs/${state.currentJobId}/save-results`, {
-                        method: 'POST',
-                        headers: { 
-                            'Content-Type': 'application/json',
-                            'X-Session-Id': session
-                        },
-                        body: JSON.stringify({ 
-                            results: state.results.slice(0, 100), // Only send first batch to trigger incremental save
-                            session: session 
-                        })
-                    });
-                } catch (e) {
-                    console.log('Could not save to server:', e);
-                }
-            }
-            
-            // For very large datasets, export in chunks using Blob streaming
             try {
-                updateStatus('📦 Export par chunks en cours...', 'info');
+                const sizeUrl = `/api/jobs/${state.currentJobId}/size?session=${encodeURIComponent(session)}`;
+                const sizeResponse = await fetch(sizeUrl, {
+                    headers: { 'X-Session-Id': session }
+                });
                 
-                // Build JSON in chunks to avoid string length limit
-                const chunks = [];
-                const header = JSON.stringify({
-                    exportVersion: '2.0',
-                    exportDate: new Date().toISOString(),
-                    jobId: state.currentJobId,
-                    config: {
-                        indicatorId: state.indicatorId,
-                        symbols: state.symbols,
-                        timeframes: Array.from(document.querySelectorAll('input[name="timeframe"]:checked')).map(cb => cb.value),
-                        dateFrom: dateFromInput.value,
-                        dateTo: dateToInput.value
-                    },
-                    summary: {
-                        totalResults: state.results.length,
-                        status: 'exported'
-                    },
-                    results: []
-                }).slice(0, -2); // Remove closing ]}
-                
-                chunks.push(header);
-                
-                // Add results one by one
-                for (let i = 0; i < state.results.length; i++) {
-                    const resultJson = JSON.stringify(state.results[i]);
-                    if (i > 0) chunks.push(',');
-                    chunks.push(resultJson);
+                if (sizeResponse.ok) {
+                    // Job exists on server in incremental format - use streaming export
+                    const sizeInfo = await sizeResponse.json();
+                    const sizeMB = (sizeInfo.compressedSize / (1024 * 1024)).toFixed(2);
+                    updateStatus(`📦 Export: ~${sizeMB} MB (${sizeInfo.resultCount} results)`, 'info');
                     
-                    // Progress update every 500 results
-                    if (i % 500 === 0) {
-                        updateStatus(`📦 Export: ${i}/${state.results.length} résultats...`, 'info');
-                        await new Promise(r => setTimeout(r, 0)); // Allow UI update
-                    }
+                    // Download the compressed export directly
+                    const exportUrl = `/api/jobs/${state.currentJobId}/export?session=${encodeURIComponent(session)}`;
+                    
+                    const a = document.createElement('a');
+                    a.href = exportUrl;
+                    a.download = ''; // Let server set filename
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+
+                    updateStatus('✅ ' + i18n.t('messages.resultsExported', { filename: 'backtest-results.json.gz', count: sizeInfo.resultCount }), 'success');
+                    setTimeout(() => statusMessage.textContent = '', 3000);
+                    return;
+                } else {
+                    const errorText = await sizeResponse.text();
+                    console.warn('Size endpoint failed:', sizeResponse.status, errorText);
                 }
-                
-                chunks.push(']}'); // Close results array and main object
-                
-                const blob = new Blob(chunks, { type: 'application/json' });
-                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-                const filename = `backtest-results-${timestamp}.json`;
-                
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-                
-                updateStatus('✅ ' + i18n.t('messages.resultsExported', { filename, count: state.results.length }), 'success');
-                setTimeout(() => statusMessage.textContent = '', 3000);
-                return;
-            } catch (chunkError) {
-                console.error('Chunk export failed:', chunkError);
-                updateStatus('❌ Export échoué - données trop volumineuses. Utilisez l\'historique pour exporter.', 'error');
-                return;
+            } catch (sizeError) {
+                console.warn('Size check failed:', sizeError);
             }
         }
         
-        updateStatus('📦 Export client-side en cours...', 'info');
+        // No job on server - show error with instructions
+        updateStatus('❌ ' + i18n.t('messages.exportNotAvailable'), 'error');
+        alert(i18n.t('messages.exportNotAvailableAlert'));
         
-        const exportData = {
-            exportVersion: '2.0',
-            exportDate: new Date().toISOString(),
-            jobId: state.currentJobId,
-            config: {
-                indicatorId: state.indicatorId,
-                symbols: state.symbols,
-                timeframes: Array.from(document.querySelectorAll('input[name="timeframe"]:checked')).map(cb => cb.value),
-                dateFrom: dateFromInput.value,
-                dateTo: dateToInput.value
-            },
-            summary: {
-                totalResults: state.results.length,
-                status: 'exported'
-            },
-            results: state.results
-        };
-
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-        const filename = `backtest-results-${timestamp}.json`;
-        const jsonString = JSON.stringify(exportData, null, 2);
-
-        const blob = new Blob([jsonString], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        updateStatus('✅ ' + i18n.t('messages.resultsExported', { filename, count: state.results.length }), 'success');
-        setTimeout(() => statusMessage.textContent = '', 3000);
     } catch (error) {
         console.error('Export results error:', error);
         updateStatus('❌ ' + i18n.t('errors.exportFailed', { error: error.message }), 'error');
@@ -2682,7 +2576,7 @@ async function exportHistoryJobJSON(jobId) {
 // Share a job - creates a public download link
 async function shareJob(jobId) {
     try {
-        updateStatus('🔗 Creating share link...', 'info');
+        updateStatus('🔗 ' + i18n.t('messages.creatingShareLink'), 'info');
 
         const syncData = getSyncData();
         const session = syncData?.session || '';
@@ -2709,18 +2603,18 @@ async function shareJob(jobId) {
         // Copy to clipboard
         try {
             await navigator.clipboard.writeText(shareUrl);
-            updateStatus(`✅ Share link copied! Valid until ${new Date(shareData.expiresAt).toLocaleDateString()}`, 'success');
+            updateStatus('✅ ' + i18n.t('messages.shareLinkCopied', { date: new Date(shareData.expiresAt).toLocaleDateString() }), 'success');
         } catch (e) {
             // Fallback: show in prompt
-            prompt('Share link (copy this):', shareUrl);
-            updateStatus(`✅ Share link created! Valid until ${new Date(shareData.expiresAt).toLocaleDateString()}`, 'success');
+            prompt(i18n.t('messages.shareLinkPrompt'), shareUrl);
+            updateStatus('✅ ' + i18n.t('messages.shareLinkCreated', { date: new Date(shareData.expiresAt).toLocaleDateString() }), 'success');
         }
         
         setTimeout(() => statusMessage.textContent = '', 5000);
 
     } catch (error) {
         console.error('Share job error:', error);
-        updateStatus('❌ Failed to create share link: ' + error.message, 'error');
+        updateStatus('❌ ' + i18n.t('messages.shareError') + ': ' + error.message, 'error');
     }
 }
 
