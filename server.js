@@ -1,7 +1,6 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const TradingView = require('@mathieuc/tradingview');
-const ExcelJS = require('exceljs');
 const WebSocket = require('ws');
 const http = require('http');
 const crypto = require('crypto');
@@ -1402,146 +1401,151 @@ app.get('/api/jobs/:id/size', async (req, res) => {
 });
 
 // API: Stream export job to Excel (for large datasets)
-app.get('/api/jobs/:id/export-excel', async (req, res) => {
+// Store for share tokens (in production, use Redis or database)
+const shareTokens = new Map();
+
+// API: Create share link for a job
+app.post('/api/jobs/:id/share', async (req, res) => {
     const { id } = req.params;
     const currentSession = req.headers['x-session-id'] || req.query.session;
+    const { expiresInDays = 30 } = req.body || {};
     
     if (!isIncrementalJob(currentSession, id)) {
-        return res.status(404).json({ error: 'Job not found or not in exportable format' });
+        return res.status(404).json({ error: 'Job not found' });
     }
     
     try {
-        const meta = await loadJobMeta(currentSession, id);
+        // Generate unique share token
+        const token = crypto.randomBytes(16).toString('hex');
+        const expiresAt = Date.now() + (expiresInDays * 24 * 60 * 60 * 1000);
         
-        // Get actual result file indices from disk
-        const resultIndices = listJobResultFiles(currentSession, id);
+        // Store token mapping
+        shareTokens.set(token, {
+            session: currentSession,
+            jobId: id,
+            createdAt: Date.now(),
+            expiresAt: expiresAt
+        });
+        
+        console.log(`🔗 Created share link for job ${id}: token ${token.substring(0, 8)}...`);
+        
+        res.json({
+            token,
+            expiresAt: new Date(expiresAt).toISOString(),
+            downloadUrl: `/api/shared/${token}/download`,
+            viewUrl: `/api/shared/${token}`
+        });
+    } catch (error) {
+        console.error('Share link error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// API: Get shared job info
+app.get('/api/shared/:token', async (req, res) => {
+    const { token } = req.params;
+    
+    const shareInfo = shareTokens.get(token);
+    if (!shareInfo) {
+        return res.status(404).json({ error: 'Share link not found or expired' });
+    }
+    
+    // Check expiration
+    if (Date.now() > shareInfo.expiresAt) {
+        shareTokens.delete(token);
+        return res.status(410).json({ error: 'Share link has expired' });
+    }
+    
+    try {
+        const meta = await loadJobMeta(shareInfo.session, shareInfo.jobId);
+        const resultIndices = listJobResultFiles(shareInfo.session, shareInfo.jobId);
+        
+        res.json({
+            jobId: shareInfo.jobId,
+            status: meta.status,
+            config: meta.config,
+            resultCount: resultIndices.length,
+            createdAt: meta.startTime,
+            expiresAt: new Date(shareInfo.expiresAt).toISOString()
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// API: Download shared job (streaming gzip)
+app.get('/api/shared/:token/download', async (req, res) => {
+    const { token } = req.params;
+    
+    const shareInfo = shareTokens.get(token);
+    if (!shareInfo) {
+        return res.status(404).json({ error: 'Share link not found or expired' });
+    }
+    
+    // Check expiration
+    if (Date.now() > shareInfo.expiresAt) {
+        shareTokens.delete(token);
+        return res.status(410).json({ error: 'Share link has expired' });
+    }
+    
+    const { session, jobId } = shareInfo;
+    
+    try {
+        const meta = await loadJobMeta(session, jobId);
+        const resultIndices = listJobResultFiles(session, jobId);
         const totalResults = resultIndices.length;
         
-        console.log(`📊 Starting Excel export for job ${id} with ${totalResults} results (meta says ${meta.resultCount || 0})`);
+        console.log(`📦 Shared download for job ${jobId}: ${totalResults} results`);
         
-        const workbook = new ExcelJS.Workbook();
-        const sheet = workbook.addWorksheet('Backtest Results');
+        // Set up response headers for gzip download
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        res.setHeader('Content-Type', 'application/gzip');
+        res.setHeader('Content-Disposition', `attachment; filename="shared-backtest-${timestamp}.json.gz"`);
         
-        // Define columns
-        sheet.columns = [
-            { header: 'Symbol', key: 'symbol', width: 15 },
-            { header: 'Timeframe', key: 'timeframe', width: 10 },
-            { header: 'Options', key: 'options', width: 40 },
-            { header: 'Net Profit', key: 'netProfit', width: 15 },
-            { header: 'Total Trades', key: 'totalClosedTrades', width: 15 },
-            { header: '% Profitable', key: 'percentProfitable', width: 15 },
-            { header: 'Profit Factor', key: 'profitFactor', width: 15 },
-            { header: 'Max Drawdown', key: 'maxDrawdown', width: 15 },
-            { header: 'Avg Trade', key: 'avgTrade', width: 15 },
-            { header: 'Sharpe Ratio', key: 'sharpeRatio', width: 15 },
-            { header: 'Sortino Ratio', key: 'sortinoRatio', width: 15 },
-            { header: 'Avg Bars in Trade', key: 'avgBarsInTrade', width: 15 }
-        ];
+        // Create gzip stream
+        const gzip = zlib.createGzip();
+        gzip.pipe(res);
         
-        // Style header
-        sheet.getRow(1).font = { bold: true };
+        // Write JSON structure
+        gzip.write('{\n');
+        gzip.write(`  "exportVersion": "2.0",\n`);
+        gzip.write(`  "exportDate": "${new Date().toISOString()}",\n`);
+        gzip.write(`  "jobId": "${meta.id}",\n`);
+        gzip.write(`  "shared": true,\n`);
+        gzip.write(`  "config": ${JSON.stringify(meta.config)},\n`);
+        gzip.write(`  "summary": {\n`);
+        gzip.write(`    "totalResults": ${totalResults},\n`);
+        gzip.write(`    "status": "${meta.status}"\n`);
+        gzip.write(`  },\n`);
+        gzip.write(`  "results": [\n`);
         
-        // Load and add results using actual file indices
+        // Stream results
+        let exportedCount = 0;
         for (let i = 0; i < totalResults; i++) {
             const resultIndex = resultIndices[i];
             try {
-                const result = await loadResult(currentSession, id, resultIndex);
-                const row = {
-                    symbol: result.symbol,
-                    timeframe: result.timeframe,
-                    options: result.optionsStr || JSON.stringify(result.options || {}),
-                    netProfit: result.results?.netProfit,
-                    totalClosedTrades: result.results?.totalClosedTrades,
-                    percentProfitable: result.results?.percentProfitable,
-                    profitFactor: result.results?.profitFactor,
-                    maxDrawdown: result.results?.maxDrawdown,
-                    avgTrade: result.results?.avgTrade,
-                    sharpeRatio: result.results?.sharpeRatio,
-                    sortinoRatio: result.results?.sortinoRatio,
-                    avgBarsInTrade: result.results?.avgBarsInTrade
-                };
-                sheet.addRow(row);
+                const result = await loadResult(session, jobId, resultIndex);
+                const prefix = exportedCount === 0 ? '    ' : ',\n    ';
+                gzip.write(prefix + JSON.stringify(result));
+                exportedCount++;
             } catch (e) {
-                console.error(`Failed to add result ${resultIndex} to Excel:`, e);
+                console.error(`Failed to export shared result ${resultIndex}:`, e);
             }
             
-            // Log progress every 500 results
-            if (i > 0 && i % 500 === 0) {
-                console.log(`📊 Excel export progress: ${i}/${totalResults}`);
-                // Yield to event loop
+            if (i % 100 === 0) {
                 await new Promise(resolve => setImmediate(resolve));
             }
         }
         
-        const timestamp = new Date().toISOString().slice(0, 10);
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename="backtest-results-${timestamp}.xlsx"`);
-        
-        await workbook.xlsx.write(res);
-        console.log(`📊 Excel export completed for job ${id}`);
+        gzip.write('\n  ]\n');
+        gzip.write('}\n');
+        gzip.end();
         
     } catch (error) {
-        console.error('Excel export error:', error);
+        console.error('Shared download error:', error);
         if (!res.headersSent) {
             res.status(500).json({ error: error.message });
         }
-    }
-});
-
-// API: Export to Excel
-app.post('/api/export', async (req, res) => {
-    try {
-        const { results } = req.body;
-        const workbook = new ExcelJS.Workbook();
-        const sheet = workbook.addWorksheet('Backtest Results');
-
-        // Define columns
-        sheet.columns = [
-            { header: 'Symbol', key: 'symbol', width: 15 },
-            { header: 'Timeframe', key: 'timeframe', width: 10 },
-            { header: 'Options', key: 'options', width: 40 },
-            { header: 'Net Profit', key: 'netProfit', width: 15 },
-            { header: 'Total Trades', key: 'totalClosedTrades', width: 15 },
-            { header: '% Profitable', key: 'percentProfitable', width: 15 },
-            { header: 'Profit Factor', key: 'profitFactor', width: 15 },
-            { header: 'Max Drawdown', key: 'maxDrawdown', width: 15 },
-            { header: 'Avg Trade', key: 'avgTrade', width: 15 },
-            { header: 'Error', key: 'error', width: 20 }
-        ];
-
-        // Add rows
-        results.forEach(r => {
-            if (r.error) {
-                sheet.addRow({
-                    symbol: r.symbol,
-                    timeframe: r.timeframe,
-                    options: JSON.stringify(r.options),
-                    error: r.error
-                });
-            } else {
-                sheet.addRow({
-                    symbol: r.symbol,
-                    timeframe: r.timeframe,
-                    options: JSON.stringify(r.options),
-                    netProfit: r.report.netProfit,
-                    totalClosedTrades: r.report.totalClosedTrades,
-                    percentProfitable: r.report.percentProfitable,
-                    profitFactor: r.report.profitFactor,
-                    maxDrawdown: r.report.maxDrawdown,
-                    avgTrade: r.report.avgTrade
-                });
-            }
-        });
-
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', 'attachment; filename=backtest_results.xlsx');
-
-        await workbook.xlsx.write(res);
-        res.end();
-
-    } catch (error) {
-        console.error('Error exporting Excel:', error);
-        res.status(500).json({ error: error.message });
     }
 });
 

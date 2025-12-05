@@ -261,15 +261,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Results import/export event listeners
     const exportResultsJSONBtn = document.getElementById('exportResultsJSONBtn');
-    const exportResultsExcelBtn = document.getElementById('exportResultsExcelBtn');
     const importResultsBtn = document.getElementById('importResultsBtn');
     const importResultsFile = document.getElementById('importResultsFile');
 
     if (exportResultsJSONBtn) {
         exportResultsJSONBtn.addEventListener('click', exportResultsJSON);
-    }
-    if (exportResultsExcelBtn) {
-        exportResultsExcelBtn.addEventListener('click', exportResultsExcel);
     }
     if (importResultsBtn) {
         importResultsBtn.addEventListener('click', () => importResultsFile.click());
@@ -421,24 +417,24 @@ function renderHistory(jobs) {
             <td>${job.symbolCount || 0}</td>
             <td class="actions-cell">
                 <button class="btn small primary load-job-btn" data-job-id="${job.id}">${i18n.t('buttons.load')}</button>
-                <button class="btn small secondary export-json-btn" data-job-id="${job.id}">📥 JSON</button>
-                <button class="btn small secondary export-excel-btn" data-job-id="${job.id}">📥 Excel</button>
+                <button class="btn small secondary export-json-btn" data-job-id="${job.id}">📥 Export</button>
+                <button class="btn small secondary share-job-btn" data-job-id="${job.id}">🔗 Share</button>
             </td>
         `;
 
         // Add click handlers to the buttons
         const loadBtn = row.querySelector('.load-job-btn');
         const exportJSONBtn = row.querySelector('.export-json-btn');
-        const exportExcelBtn = row.querySelector('.export-excel-btn');
+        const shareBtn = row.querySelector('.share-job-btn');
 
         loadBtn.addEventListener('click', () => handleLoadJob(job.id, loadBtn));
         exportJSONBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             exportHistoryJobJSON(job.id);
         });
-        exportExcelBtn.addEventListener('click', (e) => {
+        shareBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            exportHistoryJobExcel(job.id);
+            shareJob(job.id);
         });
         
         historyTableBody.appendChild(row);
@@ -2510,152 +2506,6 @@ async function exportResultsJSON() {
     }
 }
 
-// Export results to Excel (wrapper for existing functionality)
-async function exportResultsExcel() {
-    const syncData = getSyncData();
-    const session = syncData?.session || '';
-    
-    // Check if we have a job on the server first (for large datasets)
-    if (state.currentJobId) {
-        try {
-            const sizeResponse = await fetch(`/api/jobs/${state.currentJobId}/size?session=${encodeURIComponent(session)}`, {
-                headers: { 'X-Session-Id': session }
-            });
-            
-            if (sizeResponse.ok) {
-                const sizeInfo = await sizeResponse.json();
-                updateStatus(`📊 Génération Excel de ${sizeInfo.resultCount} résultats via streaming...`, 'info');
-                
-                // Use streaming export endpoint for Excel
-                const exportUrl = `/api/jobs/${state.currentJobId}/export-excel?session=${encodeURIComponent(session)}`;
-                
-                const response = await fetch(exportUrl, {
-                    headers: { 'X-Session-Id': session }
-                });
-                
-                if (response.ok) {
-                    const blob = await response.blob();
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `backtest-results-${new Date().toISOString().slice(0, 10)}.xlsx`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                    
-                    updateStatus('✅ ' + i18n.t('messages.excelDownloaded'), 'success');
-                    setTimeout(() => statusMessage.textContent = '', 3000);
-                    return;
-                }
-            }
-        } catch (e) {
-            console.log('Server streaming Excel failed, trying client-side:', e);
-        }
-    }
-    
-    // Fallback to client-side export
-    if (!state.results || state.results.length === 0) {
-        alert(i18n.t('errors.noResults'));
-        return;
-    }
-
-    // For very large datasets, warn the user
-    if (state.results.length > 1000) {
-        updateStatus(`⚠️ Export Excel de ${state.results.length} résultats - cela peut prendre du temps...`, 'info');
-    }
-
-    try {
-        updateStatus('📊 ' + i18n.t('messages.generatingExcel'), 'info');
-
-        // For large datasets, send in batches to avoid memory issues
-        if (state.results.length > 500) {
-            // Use FormData with chunked approach
-            const BATCH_SIZE = 500;
-            const batches = [];
-            for (let i = 0; i < state.results.length; i += BATCH_SIZE) {
-                batches.push(state.results.slice(i, i + BATCH_SIZE));
-            }
-            
-            updateStatus(`📊 Envoi de ${batches.length} lots au serveur...`, 'info');
-            
-            // Send first batch to create the job, then append
-            const firstBatchResponse = await fetch('/api/export-batch-start', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    results: batches[0],
-                    totalBatches: batches.length,
-                    session: session
-                })
-            });
-            
-            if (!firstBatchResponse.ok) {
-                // Fall back to single request
-                throw new Error('Batch export not supported');
-            }
-            
-            const { exportId } = await firstBatchResponse.json();
-            
-            // Send remaining batches
-            for (let i = 1; i < batches.length; i++) {
-                updateStatus(`📊 Envoi lot ${i + 1}/${batches.length}...`, 'info');
-                await fetch('/api/export-batch-append', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        exportId,
-                        results: batches[i],
-                        batchIndex: i
-                    })
-                });
-            }
-            
-            // Get final Excel
-            const response = await fetch(`/api/export-batch-finish/${exportId}`);
-            if (!response.ok) throw new Error('Export finish failed');
-            
-            const blob = await response.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `backtest-results-${new Date().toISOString().slice(0, 10)}.xlsx`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            
-            updateStatus('✅ ' + i18n.t('messages.excelDownloaded'), 'success');
-            setTimeout(() => statusMessage.textContent = '', 3000);
-            return;
-        }
-
-        const response = await fetch('/api/export', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ results: state.results })
-        });
-
-        if (!response.ok) throw new Error('Export failed');
-
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `backtest-results-${new Date().toISOString().slice(0, 10)}.xlsx`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        updateStatus('✅ ' + i18n.t('messages.excelDownloaded'), 'success');
-        setTimeout(() => statusMessage.textContent = '', 3000);
-    } catch (error) {
-        console.error('Excel export error:', error);
-        updateStatus('❌ ' + i18n.t('errors.exportFailed', { error: error.message }), 'error');
-    }
-}
-
 // Import results from JSON or JSON.GZ file
 async function handleImportResults(event) {
     const file = event.target.files[0];
@@ -2829,49 +2679,48 @@ async function exportHistoryJobJSON(jobId) {
     }
 }
 
-// Export a specific job as Excel (from history) - uses streaming to load results
-async function exportHistoryJobExcel(jobId) {
+// Share a job - creates a public download link
+async function shareJob(jobId) {
     try {
-        updateStatus('📊 ' + i18n.t('messages.generatingExcel'), 'info');
+        updateStatus('🔗 Creating share link...', 'info');
 
         const syncData = getSyncData();
         const session = syncData?.session || '';
 
-        // Load results via streaming endpoint
-        const results = await loadJobResultsForExport(jobId, session);
-
-        if (!results || results.length === 0) {
-            throw new Error('No results to export');
-        }
-
-        updateStatus(`📊 Generating Excel (${results.length} results)...`, 'info');
-
-        const exportResponse = await fetch('/api/export', {
+        const response = await fetch(`/api/jobs/${jobId}/share`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ results })
+            headers: { 
+                'Content-Type': 'application/json',
+                'X-Session-Id': session 
+            },
+            body: JSON.stringify({ expiresInDays: 30 })
         });
 
-        if (!exportResponse.ok) {
-            throw new Error('Export failed');
+        if (!response.ok) {
+            throw new Error('Failed to create share link');
         }
 
-        const blob = await exportResponse.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `backtest-results-${jobId.substring(0, 8)}.xlsx`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        updateStatus('✅ ' + i18n.t('messages.excelDownloaded'), 'success');
-        setTimeout(() => statusMessage.textContent = '', 3000);
+        const shareData = await response.json();
+        
+        // Build full URL
+        const baseUrl = window.location.origin;
+        const shareUrl = `${baseUrl}${shareData.downloadUrl}`;
+        
+        // Copy to clipboard
+        try {
+            await navigator.clipboard.writeText(shareUrl);
+            updateStatus(`✅ Share link copied! Valid until ${new Date(shareData.expiresAt).toLocaleDateString()}`, 'success');
+        } catch (e) {
+            // Fallback: show in prompt
+            prompt('Share link (copy this):', shareUrl);
+            updateStatus(`✅ Share link created! Valid until ${new Date(shareData.expiresAt).toLocaleDateString()}`, 'success');
+        }
+        
+        setTimeout(() => statusMessage.textContent = '', 5000);
 
     } catch (error) {
-        console.error('Export history job Excel error:', error);
-        updateStatus('❌ ' + i18n.t('errors.exportFailed', { error: error.message }), 'error');
+        console.error('Share job error:', error);
+        updateStatus('❌ Failed to create share link: ' + error.message, 'error');
     }
 }
 
