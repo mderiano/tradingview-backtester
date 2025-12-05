@@ -2418,53 +2418,19 @@ async function handleImportResults(event) {
             const arrayBuffer = await file.arrayBuffer();
             const uint8Array = new Uint8Array(arrayBuffer);
             
-            // Try DecompressionStream first (modern browsers)
-            if (typeof DecompressionStream !== 'undefined') {
+            // Use pako for reliable decompression (especially for large files)
+            if (typeof pako !== 'undefined') {
                 try {
-                    const ds = new DecompressionStream('gzip');
-                    const writer = ds.writable.getWriter();
-                    writer.write(uint8Array);
-                    writer.close();
-                    
-                    const decompressedStream = ds.readable;
-                    const reader = decompressedStream.getReader();
-                    const chunks = [];
-                    
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-                        chunks.push(value);
-                    }
-                    
-                    // Combine chunks and decode
-                    const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
-                    const combined = new Uint8Array(totalLength);
-                    let offset = 0;
-                    for (const chunk of chunks) {
-                        combined.set(chunk, offset);
-                        offset += chunk.length;
-                    }
-                    
-                    text = new TextDecoder().decode(combined);
-                    console.log('Decompressed with DecompressionStream, length:', text.length);
-                } catch (streamError) {
-                    console.warn('DecompressionStream failed, trying pako fallback:', streamError);
-                    // Fallback to pako if available
-                    if (typeof pako !== 'undefined') {
-                        const decompressed = pako.inflate(uint8Array, { to: 'string' });
-                        text = decompressed;
-                        console.log('Decompressed with pako, length:', text.length);
-                    } else {
-                        throw new Error('Gzip decompression failed and pako library not available');
-                    }
+                    updateStatus('📤 Décompression en cours...', 'info');
+                    const decompressed = pako.inflate(uint8Array, { to: 'string' });
+                    text = decompressed;
+                    console.log('Decompressed with pako, length:', text.length);
+                } catch (pakoError) {
+                    console.error('Pako decompression failed:', pakoError);
+                    throw new Error('Gzip decompression failed: ' + pakoError.message);
                 }
-            } else if (typeof pako !== 'undefined') {
-                // Use pako for older browsers
-                const decompressed = pako.inflate(uint8Array, { to: 'string' });
-                text = decompressed;
-                console.log('Decompressed with pako, length:', text.length);
             } else {
-                throw new Error('No gzip decompression method available. Please use a modern browser or uncompressed JSON.');
+                throw new Error('Pako library not loaded. Please refresh the page.');
             }
         } else {
             text = await file.text();
@@ -2475,6 +2441,7 @@ async function handleImportResults(event) {
         }
         
         console.log('Parsing JSON, first 200 chars:', text.substring(0, 200));
+        updateStatus('📤 Parsing JSON...', 'info');
         const imported = JSON.parse(text);
 
         validateImportedResults(imported);
