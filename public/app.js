@@ -2418,13 +2418,33 @@ async function handleImportResults(event) {
             const arrayBuffer = await file.arrayBuffer();
             const uint8Array = new Uint8Array(arrayBuffer);
             
-            // Use pako for reliable decompression (especially for large files)
+            // Use pako with chunked output for large files
             if (typeof pako !== 'undefined') {
                 try {
                     updateStatus('📤 Décompression en cours...', 'info');
-                    const decompressed = pako.inflate(uint8Array, { to: 'string' });
-                    text = decompressed;
-                    console.log('Decompressed with pako, length:', text.length);
+                    
+                    // For large files, decompress to Uint8Array first, then decode in chunks
+                    const decompressedData = pako.inflate(uint8Array);
+                    console.log('Decompressed to Uint8Array, length:', decompressedData.length);
+                    
+                    // Decode in chunks to avoid string length limit
+                    updateStatus('📤 Décodage du texte...', 'info');
+                    const decoder = new TextDecoder('utf-8');
+                    const CHUNK_SIZE = 64 * 1024 * 1024; // 64MB chunks
+                    const textChunks = [];
+                    
+                    for (let i = 0; i < decompressedData.length; i += CHUNK_SIZE) {
+                        const chunk = decompressedData.subarray(i, Math.min(i + CHUNK_SIZE, decompressedData.length));
+                        const isLast = (i + CHUNK_SIZE >= decompressedData.length);
+                        textChunks.push(decoder.decode(chunk, { stream: !isLast }));
+                        
+                        // Progress update
+                        const progress = Math.round((i / decompressedData.length) * 100);
+                        updateStatus(`📤 Décodage: ${progress}%`, 'info');
+                    }
+                    
+                    text = textChunks.join('');
+                    console.log('Decoded text length:', text.length);
                 } catch (pakoError) {
                     console.error('Pako decompression failed:', pakoError);
                     throw new Error('Gzip decompression failed: ' + pakoError.message);
