@@ -191,7 +191,75 @@
                 <div class="results-actions" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                     <div class="table-hint" data-i18n="step3.tableHint">💡 Click any row to view detailed analytics</div>
                     <div class="results-io-group" style="display: flex; gap: 0.5rem;">
+                        <button id="toggleFiltersBtn" class="btn secondary small hidden" data-i18n="buttons.toggleFilters">🔍 Filters</button>
                         <button id="exportResultsJSONBtn" class="btn secondary small">📥 Export</button>
+                    </div>
+                </div>
+
+                <!-- Results Filters Panel -->
+                <div class="filters-panel hidden" id="filtersPanel">
+                    <div class="filters-header">
+                        <h3 data-i18n="filters.title">Filters</h3>
+                        <button id="clearFiltersBtn" class="btn secondary small" data-i18n="filters.clearAll">Clear All</button>
+                    </div>
+
+                    <div class="filters-grid">
+                        <!-- Symbol Filter -->
+                        <div class="filter-group">
+                            <label data-i18n="filters.symbol">Symbol</label>
+                            <select id="filterSymbol" class="filter-select" multiple>
+                                <option value="" data-i18n="filters.allSymbols">All Symbols</option>
+                            </select>
+                        </div>
+
+                        <!-- Timeframe Filter -->
+                        <div class="filter-group">
+                            <label data-i18n="filters.timeframe">Timeframe</label>
+                            <select id="filterTimeframe" class="filter-select" multiple>
+                                <option value="" data-i18n="filters.allTimeframes">All Timeframes</option>
+                            </select>
+                        </div>
+
+                        <!-- Net Profit Filter -->
+                        <div class="filter-group">
+                            <label data-i18n="filters.netProfit">Net Profit ≥</label>
+                            <input type="number" id="filterNetProfit" class="filter-input"
+                                   data-i18n-placeholder="filters.netProfitPlaceholder"
+                                   placeholder="e.g. 100">
+                        </div>
+
+                        <!-- Drawdown Filter -->
+                        <div class="filter-group">
+                            <label data-i18n="filters.maxDrawdown">Max Drawdown ≤</label>
+                            <input type="number" id="filterMaxDrawdown" class="filter-input"
+                                   data-i18n-placeholder="filters.maxDrawdownPlaceholder"
+                                   placeholder="e.g. 10" step="0.1">
+                        </div>
+
+                        <!-- Trades Filter -->
+                        <div class="filter-group">
+                            <label data-i18n="filters.minTrades">Trades ≥</label>
+                            <input type="number" id="filterMinTrades" class="filter-input"
+                                   data-i18n-placeholder="filters.minTradesPlaceholder"
+                                   placeholder="e.g. 10" min="0">
+                        </div>
+
+                        <!-- Win Rate Filter -->
+                        <div class="filter-group">
+                            <label data-i18n="filters.winRate">Win Rate ≥</label>
+                            <input type="number" id="filterWinRate" class="filter-input"
+                                   data-i18n-placeholder="filters.winRatePlaceholder"
+                                   placeholder="e.g. 50" min="0" max="100" step="0.1">
+                        </div>
+                    </div>
+
+                    <!-- Filter Status -->
+                    <div class="filter-status" id="filterStatus">
+                        <span data-i18n="filters.showing">Showing</span>
+                        <span id="filteredCount" class="filter-count">0</span>
+                        <span data-i18n="filters.of">of</span>
+                        <span id="totalCount" class="filter-count">0</span>
+                        <span data-i18n="filters.results">results</span>
                     </div>
                 </div>
 

@@ -557,7 +557,10 @@ async function loadJobWithStreaming(jobId) {
             localStorage.setItem('currentJobId', jobId);
             state.currentJobId = jobId; // Keep the jobId for export
             resetButtonsKeepJob(); // Don't clear currentJobId
-            
+
+            // Initialize filters after loading job
+            initializeFilters();
+
             resolve();
         });
         
@@ -807,6 +810,10 @@ function connectWebSocket(jobId) {
                 const savedContainer = document.getElementById('savedProgressContainer');
                 if (savedContainer) savedContainer.style.display = 'none';
             }, 3000);
+
+            // Initialize filters after backtest completes
+            initializeFilters();
+
             resetButtons();
             ws.close();
         } else if (msg.type === 'error') {
@@ -2865,6 +2872,383 @@ function sortTable(columnIndex) {
 
     // Re-append sorted rows
     rows.forEach(row => table.appendChild(row));
+}
+
+// ======= TABLE FILTERING =======
+let filterState = {
+    symbol: [],           // Array of selected symbols
+    timeframe: [],        // Array of selected timeframes
+    netProfit: null,      // Minimum net profit (number or null)
+    maxDrawdown: null,    // Maximum drawdown (number or null)
+    minTrades: null,      // Minimum number of trades (number or null)
+    winRate: null,        // Minimum win rate percentage (number or null)
+    isActive: false       // Whether any filters are active
+};
+
+let filteredResults = []; // Cache for filtered results
+
+// Initialize filters when results are loaded
+function initializeFilters() {
+    const filtersPanel = document.getElementById('filtersPanel');
+    const toggleFiltersBtn = document.getElementById('toggleFiltersBtn');
+    const clearFiltersBtn = document.getElementById('clearFiltersBtn');
+
+    if (!filtersPanel || !toggleFiltersBtn) return;
+
+    // Show toggle button only when we have results
+    if (state.results && state.results.length > 0) {
+        toggleFiltersBtn.classList.remove('hidden');
+        filtersPanel.classList.remove('hidden');
+    } else {
+        toggleFiltersBtn.classList.add('hidden');
+        filtersPanel.classList.add('hidden');
+        return;
+    }
+
+    // Populate symbol and timeframe dropdowns
+    populateFilterDropdowns();
+
+    // Attach event listeners
+    attachFilterEventListeners();
+
+    // Initialize filter status
+    updateFilterStatus();
+
+    console.log('🔍 Filters initialized with', state.results.length, 'results');
+}
+
+// Populate symbol and timeframe dropdowns from results
+function populateFilterDropdowns() {
+    const symbolSelect = document.getElementById('filterSymbol');
+    const timeframeSelect = document.getElementById('filterTimeframe');
+
+    if (!symbolSelect || !timeframeSelect) return;
+
+    // Extract unique symbols and timeframes from results
+    const symbols = [...new Set(state.results.map(r => r.symbol))].sort();
+    const timeframes = [...new Set(state.results.map(r => r.timeframe))].sort();
+
+    // Clear existing options (keep the first "All" option)
+    symbolSelect.innerHTML = `<option value="">${i18n.t('filters.allSymbols')}</option>`;
+    timeframeSelect.innerHTML = `<option value="">${i18n.t('filters.allTimeframes')}</option>`;
+
+    // Add symbol options
+    symbols.forEach(symbol => {
+        const option = document.createElement('option');
+        option.value = symbol;
+        option.textContent = symbol;
+        symbolSelect.appendChild(option);
+    });
+
+    // Add timeframe options
+    timeframes.forEach(tf => {
+        const option = document.createElement('option');
+        option.value = tf;
+        option.textContent = tf;
+        timeframeSelect.appendChild(option);
+    });
+}
+
+// Attach event listeners to all filter inputs
+function attachFilterEventListeners() {
+    const filterSymbol = document.getElementById('filterSymbol');
+    const filterTimeframe = document.getElementById('filterTimeframe');
+    const filterNetProfit = document.getElementById('filterNetProfit');
+    const filterMaxDrawdown = document.getElementById('filterMaxDrawdown');
+    const filterMinTrades = document.getElementById('filterMinTrades');
+    const filterWinRate = document.getElementById('filterWinRate');
+    const clearFiltersBtn = document.getElementById('clearFiltersBtn');
+    const toggleFiltersBtn = document.getElementById('toggleFiltersBtn');
+
+    // Multi-select filters - apply on change
+    if (filterSymbol) {
+        filterSymbol.addEventListener('change', applyFilters);
+    }
+    if (filterTimeframe) {
+        filterTimeframe.addEventListener('change', applyFilters);
+    }
+
+    // Numeric filters - apply on input with debounce
+    const numericFilters = [filterNetProfit, filterMaxDrawdown, filterMinTrades, filterWinRate];
+    numericFilters.forEach(filter => {
+        if (filter) {
+            filter.addEventListener('input', debounce(applyFilters, 300));
+        }
+    });
+
+    // Clear filters button
+    if (clearFiltersBtn) {
+        clearFiltersBtn.addEventListener('click', clearAllFilters);
+    }
+
+    // Toggle filters panel
+    if (toggleFiltersBtn) {
+        toggleFiltersBtn.addEventListener('click', toggleFiltersPanel);
+    }
+}
+
+// Debounce helper for numeric input filters
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+// Apply all active filters to results
+function applyFilters() {
+    // Read current filter values
+    const symbolSelect = document.getElementById('filterSymbol');
+    const timeframeSelect = document.getElementById('filterTimeframe');
+    const filterNetProfit = document.getElementById('filterNetProfit');
+    const filterMaxDrawdown = document.getElementById('filterMaxDrawdown');
+    const filterMinTrades = document.getElementById('filterMinTrades');
+    const filterWinRate = document.getElementById('filterWinRate');
+
+    // Update filter state
+    filterState.symbol = Array.from(symbolSelect.selectedOptions)
+        .map(opt => opt.value)
+        .filter(val => val !== '');
+
+    filterState.timeframe = Array.from(timeframeSelect.selectedOptions)
+        .map(opt => opt.value)
+        .filter(val => val !== '');
+
+    filterState.netProfit = filterNetProfit.value ? parseFloat(filterNetProfit.value) : null;
+    filterState.maxDrawdown = filterMaxDrawdown.value ? parseFloat(filterMaxDrawdown.value) : null;
+    filterState.minTrades = filterMinTrades.value ? parseInt(filterMinTrades.value, 10) : null;
+    filterState.winRate = filterWinRate.value ? parseFloat(filterWinRate.value) : null;
+
+    // Check if any filters are active
+    filterState.isActive =
+        filterState.symbol.length > 0 ||
+        filterState.timeframe.length > 0 ||
+        filterState.netProfit !== null ||
+        filterState.maxDrawdown !== null ||
+        filterState.minTrades !== null ||
+        filterState.winRate !== null;
+
+    // Filter results
+    if (filterState.isActive) {
+        filteredResults = state.results.filter(result => {
+            // Symbol filter
+            if (filterState.symbol.length > 0 && !filterState.symbol.includes(result.symbol)) {
+                return false;
+            }
+
+            // Timeframe filter
+            if (filterState.timeframe.length > 0 && !filterState.timeframe.includes(result.timeframe)) {
+                return false;
+            }
+
+            // Skip results with errors or no report
+            if (!result.report || result.error) {
+                return false;
+            }
+
+            // Net Profit filter (minimum)
+            if (filterState.netProfit !== null) {
+                const netProfit = result.report.netProfit;
+                if (netProfit === 'N/A' || netProfit < filterState.netProfit) {
+                    return false;
+                }
+            }
+
+            // Max Drawdown filter (maximum)
+            if (filterState.maxDrawdown !== null) {
+                const drawdown = result.report.maxDrawdown;
+                if (drawdown === 'N/A' || drawdown > filterState.maxDrawdown) {
+                    return false;
+                }
+            }
+
+            // Min Trades filter (minimum)
+            if (filterState.minTrades !== null) {
+                const trades = result.report.totalClosedTrades;
+                if (trades === 'N/A' || trades < filterState.minTrades) {
+                    return false;
+                }
+            }
+
+            // Win Rate filter (minimum percentage)
+            if (filterState.winRate !== null) {
+                const winRate = result.report.percentProfitable;
+                if (winRate === 'N/A' || winRate < filterState.winRate) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+    } else {
+        filteredResults = [...state.results];
+    }
+
+    // Re-render table with filtered results
+    renderFilteredResults();
+
+    // Update filter status display
+    updateFilterStatus();
+
+    // Update toggle button state
+    const toggleBtn = document.getElementById('toggleFiltersBtn');
+    if (toggleBtn) {
+        if (filterState.isActive) {
+            toggleBtn.classList.add('active');
+        } else {
+            toggleBtn.classList.remove('active');
+        }
+    }
+
+    console.log('🔍 Filters applied:', filteredResults.length, 'of', state.results.length, 'results');
+}
+
+// Render filtered results to table
+function renderFilteredResults() {
+    const tbody = resultsTableBody;
+    tbody.innerHTML = '';
+
+    // If no results after filtering, show message
+    if (filteredResults.length === 0) {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+                ${i18n.t('filters.noResults')}
+            </td>
+        `;
+        tbody.appendChild(row);
+        return;
+    }
+
+    // Render each filtered result
+    filteredResults.forEach((result, index) => {
+        const row = createResultRowElement(result, index);
+        tbody.appendChild(row);
+    });
+
+    // Re-apply sorting if active
+    if (sortState.column !== null) {
+        sortTable(sortState.column);
+    }
+}
+
+// Create a result row element (extracted from addResultRow for reusability)
+function createResultRowElement(r, originalIndex) {
+    const row = document.createElement('tr');
+    row.dataset.resultIndex = originalIndex;
+    row.addEventListener('click', () => openAnalyticsModal(r));
+
+    if (r.error || !r.report) {
+        row.classList.add('result-row-error');
+        row.innerHTML = `
+            <td>${r.symbol}</td>
+            <td>${r.timeframe}</td>
+            <td><small>${formatOptions(r.options)}</small></td>
+            <td colspan="6" class="negative">${r.error || 'Unknown error (No report data)'}</td>
+        `;
+    } else {
+        const netProfit = r.report.netProfit !== 'N/A' ? r.report.netProfit : null;
+        const netProfitClass = netProfit !== null && netProfit >= 0 ? 'positive' : 'negative';
+
+        if (netProfit !== null) {
+            row.classList.add(netProfit >= 0 ? 'result-row-profit' : 'result-row-loss');
+        }
+
+        row.innerHTML = `
+            <td>${r.symbol}</td>
+            <td>${r.timeframe}</td>
+            <td><small>${formatOptions(r.options)}</small></td>
+            <td class="${netProfitClass}">${formatNumber(r.report.netProfit)}</td>
+            <td>${r.report.totalClosedTrades !== 'N/A' ? r.report.totalClosedTrades : 'N/A'}</td>
+            <td>${formatNumber(r.report.percentProfitable)}${r.report.percentProfitable !== 'N/A' ? '%' : ''}</td>
+            <td>${formatNumber(r.report.profitFactor)}</td>
+            <td class="negative">${formatNumber(r.report.maxDrawdown)}%</td>
+            <td>${formatNumber(r.report.avgTrade)}</td>
+        `;
+    }
+
+    return row;
+}
+
+// Update filter status display
+function updateFilterStatus() {
+    const filteredCountEl = document.getElementById('filteredCount');
+    const totalCountEl = document.getElementById('totalCount');
+
+    if (!filteredCountEl || !totalCountEl) return;
+
+    const filteredCount = filterState.isActive ? filteredResults.length : state.results.length;
+    const totalCount = state.results.length;
+
+    filteredCountEl.textContent = filteredCount;
+    totalCountEl.textContent = totalCount;
+
+    // Highlight if filtering is active
+    const filterStatus = document.getElementById('filterStatus');
+    if (filterStatus) {
+        if (filterState.isActive && filteredCount < totalCount) {
+            filterStatus.style.background = 'rgba(99, 102, 241, 0.15)';
+            filterStatus.style.borderColor = 'rgba(99, 102, 241, 0.3)';
+        } else {
+            filterStatus.style.background = 'rgba(99, 102, 241, 0.1)';
+            filterStatus.style.borderColor = 'rgba(99, 102, 241, 0.2)';
+        }
+    }
+}
+
+// Clear all filters
+function clearAllFilters() {
+    // Reset filter inputs
+    const filterSymbol = document.getElementById('filterSymbol');
+    const filterTimeframe = document.getElementById('filterTimeframe');
+    const filterNetProfit = document.getElementById('filterNetProfit');
+    const filterMaxDrawdown = document.getElementById('filterMaxDrawdown');
+    const filterMinTrades = document.getElementById('filterMinTrades');
+    const filterWinRate = document.getElementById('filterWinRate');
+
+    if (filterSymbol) filterSymbol.selectedIndex = -1;
+    if (filterTimeframe) filterTimeframe.selectedIndex = -1;
+    if (filterNetProfit) filterNetProfit.value = '';
+    if (filterMaxDrawdown) filterMaxDrawdown.value = '';
+    if (filterMinTrades) filterMinTrades.value = '';
+    if (filterWinRate) filterWinRate.value = '';
+
+    // Reset filter state
+    filterState = {
+        symbol: [],
+        timeframe: [],
+        netProfit: null,
+        maxDrawdown: null,
+        minTrades: null,
+        winRate: null,
+        isActive: false
+    };
+
+    // Re-apply (which will show all results)
+    applyFilters();
+
+    console.log('🔍 Filters cleared');
+}
+
+// Toggle filters panel visibility
+function toggleFiltersPanel() {
+    const filtersPanel = document.getElementById('filtersPanel');
+    const toggleBtn = document.getElementById('toggleFiltersBtn');
+
+    if (!filtersPanel) return;
+
+    if (filtersPanel.classList.contains('hidden')) {
+        filtersPanel.classList.remove('hidden');
+        if (toggleBtn) toggleBtn.textContent = '🔍 ' + i18n.t('buttons.hideFilters');
+    } else {
+        filtersPanel.classList.add('hidden');
+        if (toggleBtn) toggleBtn.textContent = '🔍 ' + i18n.t('buttons.showFilters');
+    }
 }
 
 // Initialize sorting when results are shown
