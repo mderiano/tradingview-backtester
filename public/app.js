@@ -447,17 +447,20 @@ async function handleLoadJob(jobId, button) {
         // Add loading state to button
         button.classList.add('loading');
         button.disabled = true;
-        
-        // Show loading message
+
+        // Show loading message immediately
         statusMessage.textContent = i18n.t('messages.loadingJob');
         statusMessage.className = 'status-message info';
-        
+
         // Close modal immediately to show results as they stream in
         historyModal.classList.add('hidden');
-        
+
+        // Scroll to results section immediately
+        step3.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
         // Use streaming endpoint
         await loadJobWithStreaming(jobId);
-        
+
         // Remove loading state
         button.classList.remove('loading');
         button.disabled = false;
@@ -466,7 +469,7 @@ async function handleLoadJob(jobId, button) {
         // Remove loading state
         button.classList.remove('loading');
         button.disabled = false;
-        
+
         alert(i18n.t('errors.loadingJob', { message: e.message }));
     }
 }
@@ -2405,9 +2408,19 @@ async function handleImportResults(event) {
     const file = event.target.files[0];
     if (!file) return;
 
+    // Add temporary "Importing..." row to history table
+    const tempRow = document.createElement('tr');
+    tempRow.id = 'importing-row';
+    tempRow.innerHTML = `
+        <td colspan="5" style="text-align: center; padding: 1rem;">
+            <span class="status-badge status-running">${i18n.t('messages.importing')}</span>
+        </td>
+    `;
+    historyTableBody.insertBefore(tempRow, historyTableBody.firstChild);
+
     try {
         const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-        updateStatus(`📤 Uploading ${file.name} (${sizeMB} MB)...`, 'info');
+        updateStatus(`📤 ${i18n.t('messages.importingResults')} (${sizeMB} MB)`, 'info');
         console.log('Uploading file to server:', file.name, 'size:', file.size);
 
         // Get current session
@@ -2434,27 +2447,28 @@ async function handleImportResults(event) {
         const result = await response.json();
         console.log('Import successful:', result);
 
-        // Refresh job list to show the imported job
-        updateStatus(`✅ Imported ${result.resultCount} results. Loading job...`, 'success');
+        // Remove temporary row
+        const importingRow = document.getElementById('importing-row');
+        if (importingRow) {
+            importingRow.remove();
+        }
 
-        // Close history modal
-        historyModal.classList.add('hidden');
-
-        // Load the imported job
-        setTimeout(async () => {
-            try {
-                await loadJobWithStreaming(result.jobId);
-                updateStatus(`✅ Imported ${result.resultCount} results successfully`, 'success');
-                setTimeout(() => statusMessage.textContent = '', 3000);
-            } catch (loadError) {
-                console.error('Failed to load imported job:', loadError);
-                updateStatus('✅ Import successful. Refresh page to see results.', 'success');
-            }
-        }, 500);
+        // Refresh history to show the imported job
+        updateStatus(`✅ ${i18n.t('messages.resultsImported', { count: result.resultCount })}`, 'success');
+        await fetchHistory();
 
         event.target.value = '';
+        setTimeout(() => statusMessage.textContent = '', 3000);
+
     } catch (error) {
         console.error('Import error:', error);
+
+        // Remove temporary row on error
+        const importingRow = document.getElementById('importing-row');
+        if (importingRow) {
+            importingRow.remove();
+        }
+
         updateStatus('❌ ' + i18n.t('errors.importFailed', { error: error.message }), 'error');
         event.target.value = '';
     }

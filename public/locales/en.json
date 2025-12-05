@@ -63,6 +63,7 @@
   "messages.generatingExcel": "Generating Excel file...",
   "messages.excelDownloaded": "Excel file downloaded",
   "messages.importingResults": "Importing results...",
+  "messages.importing": "Importing...",
   "messages.resultsImported": "Imported {{count}} results",
   "messages.preparingExport": "Preparing export...",
   "messages.exportNotAvailable": "Export not available - results must be saved on server. Use history.",

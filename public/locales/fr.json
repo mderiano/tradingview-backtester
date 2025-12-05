@@ -63,6 +63,7 @@
   "messages.generatingExcel": "Génération du fichier Excel...",
   "messages.excelDownloaded": "Fichier Excel téléchargé",
   "messages.importingResults": "Importation des résultats...",
+  "messages.importing": "Importation en cours...",
   "messages.resultsImported": "{{count}} résultats importés",
   "messages.preparingExport": "Préparation de l'export...",
   "messages.exportNotAvailable": "Export non disponible - les résultats doivent être sauvegardés sur le serveur. Utilisez l'historique.",
