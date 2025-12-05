@@ -2400,71 +2400,61 @@ async function exportResultsJSON() {
     }
 }
 
-// Import results from JSON or JSON.GZ file
+// Import results from JSON or JSON.GZ file (upload to server for processing)
 async function handleImportResults(event) {
     const file = event.target.files[0];
     if (!file) return;
 
     try {
-        updateStatus('📤 ' + i18n.t('messages.importingResults'), 'info');
+        const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+        updateStatus(`📤 Uploading ${file.name} (${sizeMB} MB)...`, 'info');
+        console.log('Uploading file to server:', file.name, 'size:', file.size);
 
-        let imported;
-        
-        // Check if file is gzip compressed
-        if (file.name.endsWith('.gz')) {
-            console.log('Importing gzip file:', file.name, 'size:', file.size);
-            
-            // Read file as ArrayBuffer first
-            const arrayBuffer = await file.arrayBuffer();
-            const uint8Array = new Uint8Array(arrayBuffer);
-            
-            // Use pako with chunked output for large files
-            if (typeof pako !== 'undefined') {
-                try {
-                    updateStatus('📤 Décompression en cours...', 'info');
-                    
-                    // Decompress to Uint8Array
-                    const decompressedData = pako.inflate(uint8Array);
-                    console.log('Decompressed to Uint8Array, length:', decompressedData.length);
-                    
-                    // For very large files (>500MB decompressed), use streaming JSON parse
-                    if (decompressedData.length > 500 * 1024 * 1024) {
-                        updateStatus('📤 Parsing JSON (fichier volumineux)...', 'info');
-                        imported = await parseJsonFromUint8Array(decompressedData);
-                    } else {
-                        // For smaller files, decode normally
-                        updateStatus('📤 Décodage du texte...', 'info');
-                        const decoder = new TextDecoder('utf-8');
-                        const text = decoder.decode(decompressedData);
-                        console.log('Decoded text length:', text.length);
-                        
-                        updateStatus('📤 Parsing JSON...', 'info');
-                        imported = JSON.parse(text);
-                    }
-                } catch (pakoError) {
-                    console.error('Pako decompression failed:', pakoError);
-                    throw new Error('Gzip decompression failed: ' + pakoError.message);
-                }
-            } else {
-                throw new Error('Pako library not loaded. Please refresh the page.');
+        // Get current session
+        const syncData = getSyncData();
+        const session = syncData?.session || '';
+
+        // Create FormData and upload to server
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch('/api/jobs/import', {
+            method: 'POST',
+            headers: {
+                'X-Session-Id': session
+            },
+            body: formData
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Import failed');
+        }
+
+        const result = await response.json();
+        console.log('Import successful:', result);
+
+        // Refresh job list to show the imported job
+        updateStatus(`✅ Imported ${result.resultCount} results. Loading job...`, 'success');
+
+        // Close history modal
+        historyModal.classList.add('hidden');
+
+        // Load the imported job
+        setTimeout(async () => {
+            try {
+                await loadJobWithStreaming(result.jobId);
+                updateStatus(`✅ Imported ${result.resultCount} results successfully`, 'success');
+                setTimeout(() => statusMessage.textContent = '', 3000);
+            } catch (loadError) {
+                console.error('Failed to load imported job:', loadError);
+                updateStatus('✅ Import successful. Refresh page to see results.', 'success');
             }
-        } else {
-            const text = await file.text();
-            imported = JSON.parse(text);
-        }
-        
-        if (!imported) {
-            throw new Error('Failed to parse file');
-        }
+        }, 500);
 
-        validateImportedResults(imported);
-
-        applyImportedResults(imported);
-        updateStatus('✅ ' + i18n.t('messages.resultsImported', { count: imported.results.length }), 'success');
-        setTimeout(() => statusMessage.textContent = '', 3000);
         event.target.value = '';
     } catch (error) {
-        console.error('Import results error:', error);
+        console.error('Import error:', error);
         updateStatus('❌ ' + i18n.t('errors.importFailed', { error: error.message }), 'error');
         event.target.value = '';
     }

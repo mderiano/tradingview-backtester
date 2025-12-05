@@ -7,6 +7,9 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const multer = require('multer');
+const archiver = require('archiver');
+const unzipper = require('unzipper');
 require('dotenv').config();
 
 // Global error handlers to catch unhandled WebSocket 429 errors
@@ -1292,77 +1295,186 @@ app.get('/api/jobs/:id/stream', async (req, res) => {
     res.end();
 });
 
-// API: Export Job to compressed JSON (streaming, no memory issues)
+// API: Export Job as compressed folder (simple zip of job directory)
 app.get('/api/jobs/:id/export', async (req, res) => {
     const { id } = req.params;
     const currentSession = req.headers['x-session-id'] || req.query.session;
-    
+
     // Check for incremental format
     if (!isIncrementalJob(currentSession, id)) {
         return res.status(404).json({ error: 'Job not found or not in exportable format' });
     }
-    
+
     try {
+        const jobDir = getJobDir(currentSession, id);
+
+        if (!fs.existsSync(jobDir)) {
+            return res.status(404).json({ error: 'Job directory not found' });
+        }
+
         const meta = await loadJobMeta(currentSession, id);
-        
-        // Get actual result file indices from disk (not from meta.resultCount which may be stale)
         const resultIndices = listJobResultFiles(currentSession, id);
         const totalResults = resultIndices.length;
-        
-        console.log(`📦 Starting export for job ${id}: ${totalResults} results found on disk (meta says ${meta.resultCount || 0})`);
-        
-        // Set up response headers for gzip download
+
+        console.log(`📦 Exporting job ${id}: ${totalResults} results`);
+
+        // Set up response headers for zip download
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-        res.setHeader('Content-Type', 'application/gzip');
-        res.setHeader('Content-Disposition', `attachment; filename="backtest-results-${timestamp}.json.gz"`);
-        
-        // Create gzip stream
-        const gzip = zlib.createGzip();
-        gzip.pipe(res);
-        
-        // Write opening of JSON structure
-        gzip.write('{\n');
-        gzip.write(`  "exportVersion": "2.0",\n`);
-        gzip.write(`  "exportDate": "${new Date().toISOString()}",\n`);
-        gzip.write(`  "jobId": "${meta.id}",\n`);
-        gzip.write(`  "config": ${JSON.stringify(meta.config)},\n`);
-        gzip.write(`  "summary": {\n`);
-        gzip.write(`    "totalResults": ${totalResults},\n`);
-        gzip.write(`    "status": "${meta.status}"\n`);
-        gzip.write(`  },\n`);
-        gzip.write(`  "results": [\n`);
-        
-        // Stream results one by one using actual file indices
-        let exportedCount = 0;
-        for (let i = 0; i < totalResults; i++) {
-            const resultIndex = resultIndices[i];
-            try {
-                const result = await loadResult(currentSession, id, resultIndex);
-                const prefix = exportedCount === 0 ? '    ' : ',\n    ';
-                gzip.write(prefix + JSON.stringify(result));
-                exportedCount++;
-            } catch (e) {
-                console.error(`Failed to export result ${resultIndex}:`, e);
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="backtest-job-${timestamp}.zip"`);
+
+        // Create zip archive
+        const archive = archiver('zip', {
+            zlib: { level: 9 } // Maximum compression
+        });
+
+        archive.on('error', (err) => {
+            console.error('📦 Archive error:', err);
+            if (!res.headersSent) {
+                res.status(500).json({ error: err.message });
             }
-            
-            // Yield to event loop periodically
-            if (i % 100 === 0) {
-                await new Promise(resolve => setImmediate(resolve));
-            }
-        }
-        
-        // Close JSON structure
-        gzip.write('\n  ]\n');
-        gzip.write('}\n');
-        gzip.end();
-        
-        console.log(`📦 Exported job ${id} with ${exportedCount} results`);
-        
+        });
+
+        // Pipe archive to response
+        archive.pipe(res);
+
+        // Add all files from job directory
+        archive.directory(jobDir, false);
+
+        // Finalize the archive
+        await archive.finalize();
+
+        console.log(`📦 Exported job ${id} successfully`);
+
     } catch (error) {
-        console.error('Export error:', error);
+        console.error('📦 Export error:', error);
         if (!res.headersSent) {
             res.status(500).json({ error: error.message });
         }
+    }
+});
+
+// Configure multer for file uploads (store in temp directory for unzipping)
+const upload = multer({
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+            const tempDir = path.join(__dirname, 'temp-uploads');
+            if (!fs.existsSync(tempDir)) {
+                fs.mkdirSync(tempDir, { recursive: true });
+            }
+            cb(null, tempDir);
+        },
+        filename: (req, file, cb) => {
+            cb(null, `${Date.now()}-${file.originalname}`);
+        }
+    }),
+    limits: {
+        fileSize: 500 * 1024 * 1024 // 500MB max file size
+    }
+});
+
+// API: Import Job from compressed folder (simple unzip)
+app.post('/api/jobs/import', upload.single('file'), async (req, res) => {
+    const currentSession = req.headers['x-session-id'] || req.body.session;
+    let tempFilePath = null;
+
+    if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    tempFilePath = req.file.path;
+    console.log(`📥 Starting import: ${req.file.originalname} (${(req.file.size / (1024*1024)).toFixed(1)} MB)`);
+
+    try {
+        // Generate new job ID
+        const newJobId = crypto.randomBytes(16).toString('hex');
+        const userDir = getUserDir(currentSession);
+        const newJobDir = path.join(userDir, newJobId);
+
+        // Create job directory
+        if (!fs.existsSync(newJobDir)) {
+            fs.mkdirSync(newJobDir, { recursive: true });
+        }
+
+        // Extract zip file directly to job directory
+        console.log(`📥 Extracting to ${newJobDir}...`);
+
+        await new Promise((resolve, reject) => {
+            fs.createReadStream(tempFilePath)
+                .pipe(unzipper.Extract({ path: newJobDir }))
+                .on('close', resolve)
+                .on('error', reject);
+        });
+
+        console.log(`📥 Extracted successfully`);
+
+        // Load and update metadata with new session
+        const metaPath = path.join(newJobDir, 'meta.json.gz');
+
+        if (!fs.existsSync(metaPath)) {
+            throw new Error('Invalid job archive: meta.json.gz not found');
+        }
+
+        const meta = await loadJobMeta(currentSession, newJobId);
+
+        // Update session to current user
+        meta.session = currentSession;
+        meta.id = newJobId;
+        meta.isImported = true;
+        meta.importDate = new Date().toISOString();
+
+        // Save updated metadata
+        const metaJson = JSON.stringify(meta, null, 2);
+        await new Promise((resolve, reject) => {
+            zlib.gzip(metaJson, (err, compressed) => {
+                if (err) return reject(err);
+                fs.writeFile(metaPath, compressed, (err) => {
+                    if (err) return reject(err);
+                    resolve();
+                });
+            });
+        });
+
+        // Count results
+        const resultIndices = listJobResultFiles(currentSession, newJobId);
+        const resultCount = resultIndices.length;
+
+        // Update job index
+        updateJobIndex(currentSession, newJobId, {
+            id: newJobId,
+            status: meta.status || 'completed',
+            startTime: meta.startTime || new Date().toISOString(),
+            symbolCount: resultCount,
+            indicatorId: meta.config?.indicatorId || null,
+            symbols: meta.config?.symbols || [],
+            isArchived: false,
+            isIncremental: true,
+            isImported: true
+        });
+
+        console.log(`✅ Import completed: Job ${newJobId} with ${resultCount} results`);
+
+        // Clean up temp file
+        if (tempFilePath && fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath);
+        }
+
+        res.json({
+            success: true,
+            jobId: newJobId,
+            resultCount: resultCount,
+            message: `Imported ${resultCount} results successfully`
+        });
+
+    } catch (error) {
+        console.error('❌ Import error:', error);
+
+        // Clean up temp file on error
+        if (tempFilePath && fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath);
+        }
+
+        res.status(500).json({ error: error.message });
     }
 });
 
