@@ -17,6 +17,8 @@
   "buttons.toggleFilters": "🔍 Filters",
   "buttons.showFilters": "🔍 Show Filters",
   "buttons.hideFilters": "🔍 Hide Filters",
+  "buttons.retry": "Retry",
+  "buttons.retryAll": "Retry All",
 
   "filters.title": "Filters",
   "filters.clearAll": "Clear All",
@@ -110,6 +112,10 @@
   "messages.runningInline": "Running...",
   "messages.noPerformanceData": "No performance data available",
   "messages.noTrades": "No trades available",
+  "messages.noFailedResults": "No failed results to retry",
+  "messages.retryingAll": "Retrying {{count}} failed backtest(s)...",
+  "messages.retryingProgress": "Retrying {{current}}/{{total}}...",
+  "messages.retryAllComplete": "All retries completed",
 
   "status.pending": "pending",
   "status.running": "running",
@@ -137,6 +143,7 @@
 
   "dialogs.confirmBacktest": "This will run {{count}} backtests. Are you sure?",
   "dialogs.confirmClear": "Clear all saved settings? This will reset symbols, timeframes, options, and ranges.",
+  "dialogs.confirmRetryAll": "This will retry {{count}} failed backtest(s). Are you sure?",
 
   "modal.analyticsTitle": "Strategy Analytics",
   "modal.historyTitle": "Backtest History",

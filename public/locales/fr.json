@@ -17,6 +17,8 @@
   "buttons.toggleFilters": "🔍 Filtres",
   "buttons.showFilters": "🔍 Afficher les Filtres",
   "buttons.hideFilters": "🔍 Masquer les Filtres",
+  "buttons.retry": "Réessayer",
+  "buttons.retryAll": "Tout Réessayer",
 
   "filters.title": "Filtres",
   "filters.clearAll": "Tout Effacer",
@@ -110,6 +112,10 @@
   "messages.runningInline": "En cours...",
   "messages.noPerformanceData": "Aucune donnée de performance disponible",
   "messages.noTrades": "Aucun trade disponible",
+  "messages.noFailedResults": "Aucun résultat en échec à réessayer",
+  "messages.retryingAll": "Nouvelle tentative pour {{count}} backtest(s) en échec...",
+  "messages.retryingProgress": "Nouvelle tentative {{current}}/{{total}}...",
+  "messages.retryAllComplete": "Toutes les nouvelles tentatives sont terminées",
 
   "status.pending": "en attente",
   "status.running": "en cours",
@@ -137,6 +143,7 @@
 
   "dialogs.confirmBacktest": "Cela lancera {{count}} backtests. Êtes-vous sûr?",
   "dialogs.confirmClear": "Effacer tous les paramètres sauvegardés? Cela réinitialisera les symboles, périodes, options et plages.",
+  "dialogs.confirmRetryAll": "Cela réessaiera {{count}} backtest(s) en échec. Êtes-vous sûr?",
 
   "modal.analyticsTitle": "Analyse de la Stratégie",
   "modal.historyTitle": "Historique des Backtests",

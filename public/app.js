@@ -180,6 +180,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const exportResultsJSONBtn = document.getElementById('exportResultsJSONBtn');
     const importResultsBtn = document.getElementById('importResultsBtn');
     const importResultsFile = document.getElementById('importResultsFile');
+    const retryAllFailedBtn = document.getElementById('retryAllFailedBtn');
 
     if (exportResultsJSONBtn) {
         exportResultsJSONBtn.addEventListener('click', exportResultsJSON);
@@ -189,6 +190,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     if (importResultsFile) {
         importResultsFile.addEventListener('change', handleImportResults);
+    }
+    if (retryAllFailedBtn) {
+        retryAllFailedBtn.addEventListener('click', retryAllFailedBacktests);
     }
 });
 
@@ -447,21 +451,21 @@ async function loadJobWithStreaming(jobId) {
         
         eventSource.addEventListener('complete', (event) => {
             eventSource.close();
-            
+
             // Final status update
             if (jobMetadata) {
-                const dateStr = jobMetadata.startTime 
-                    ? new Date(jobMetadata.startTime).toLocaleString() 
+                const dateStr = jobMetadata.startTime
+                    ? new Date(jobMetadata.startTime).toLocaleString()
                     : 'unknown date';
                 statusMessage.textContent = i18n.t('messages.jobLoaded', { date: dateStr, count: allResults.length });
-                
+
                 if (jobMetadata.status === 'completed') {
                     statusMessage.style.color = '#4CAF50';
                 } else if (jobMetadata.status === 'failed') {
                     statusMessage.style.color = '#ff4444';
                 }
             }
-            
+
             // Save ID to local storage and state
             localStorage.setItem('currentJobId', jobId);
             state.currentJobId = jobId; // Keep the jobId for export
@@ -469,6 +473,9 @@ async function loadJobWithStreaming(jobId) {
 
             // Initialize filters after loading job
             initializeFilters();
+
+            // Update retry all button visibility
+            updateRetryAllButtonVisibility();
 
             resolve();
         });
@@ -551,6 +558,9 @@ async function loadSharedJob(token) {
 
             // Initialize filters after loading
             initializeFilters();
+
+            // Update retry all button visibility
+            updateRetryAllButtonVisibility();
 
             resolve();
         });
@@ -904,6 +914,59 @@ async function retryBacktest(row) {
     }
 }
 
+async function retryAllFailedBacktests() {
+    const errorRows = document.querySelectorAll('tr.result-row-error');
+
+    if (errorRows.length === 0) {
+        alert(i18n.t('messages.noFailedResults'));
+        return;
+    }
+
+    const confirmMsg = i18n.t('dialogs.confirmRetryAll', { count: errorRows.length });
+    if (!confirm(confirmMsg)) {
+        return;
+    }
+
+    const syncData = getSyncData();
+    if (!syncData || !syncData.session) {
+        alert(i18n.t('errors.noSession'));
+        return;
+    }
+
+    updateStatus(i18n.t('messages.retryingAll', { count: errorRows.length }), 'info');
+
+    // Retry all failed tests sequentially to avoid overwhelming the server
+    for (let i = 0; i < errorRows.length; i++) {
+        const row = errorRows[i];
+        updateStatus(i18n.t('messages.retryingProgress', { current: i + 1, total: errorRows.length }), 'info');
+        await retryBacktest(row);
+
+        // Small delay between retries to avoid rate limiting
+        if (i < errorRows.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+    }
+
+    updateStatus(i18n.t('messages.retryAllComplete'), 'success');
+
+    // Update the retry all button visibility
+    updateRetryAllButtonVisibility();
+}
+
+function updateRetryAllButtonVisibility() {
+    const retryAllBtn = document.getElementById('retryAllFailedBtn');
+    if (!retryAllBtn) return;
+
+    const errorCount = state.results.filter(r => r.error || !r.report).length;
+
+    if (errorCount > 0) {
+        retryAllBtn.classList.remove('hidden');
+        retryAllBtn.textContent = `🔄 ${i18n.t('buttons.retryAll')} (${errorCount})`;
+    } else {
+        retryAllBtn.classList.add('hidden');
+    }
+}
+
 // Helper: Generate range values (Client-side)
 function getRangeValues(min, max, step) {
     const values = [];
@@ -1000,6 +1063,9 @@ async function runBacktest() {
     resultsTableBody.innerHTML = '';
     state.results = []; // Clear previous results
     step3.classList.remove('hidden'); // Show results section
+
+    // Hide retry all button when clearing results
+    updateRetryAllButtonVisibility();
 
     // Scroll to results section
     setTimeout(() => {
@@ -2195,14 +2261,14 @@ function updateRowWithRetrying(data) {
 function updateRowWithResult(r) {
     const rowId = getRowId(r);
     let row = document.querySelector(`tr[data-row-id="${rowId}"]`);
-    
+
     // If no existing row, create a new one
     if (!row) {
         row = document.createElement('tr');
         row.dataset.rowId = rowId;
         resultsTableBody.appendChild(row);
     }
-    
+
     // Remove pending/running/retrying classes
     row.classList.remove('result-row-pending', 'result-row-running', 'result-row-retrying');
     row.dataset.resultIndex = state.results.length - 1;
@@ -2211,12 +2277,12 @@ function updateRowWithResult(r) {
     if (r.error || !r.report) {
         row.classList.add('result-row-error');
         row.onclick = null; // No modal for errors
-        
+
         // Store data for retry
         row.dataset.symbol = r.symbol;
         row.dataset.timeframe = r.timeframe;
         row.dataset.options = JSON.stringify(r.options);
-        
+
         row.innerHTML = `
             <td>${r.symbol}</td>
             <td>${r.timeframe}</td>
@@ -2224,7 +2290,7 @@ function updateRowWithResult(r) {
             <td colspan="5" class="negative">${r.error || 'Unknown error (No report data)'}</td>
             <td>
                 <button class="retry-btn" onclick="event.stopPropagation(); retryBacktest(this.closest('tr'))">
-                    🔄 Retry
+                    🔄 ${i18n.t('buttons.retry')}
                 </button>
             </td>
         `;
@@ -2249,6 +2315,9 @@ function updateRowWithResult(r) {
             <td>${formatNumber(r.report.avgTrade)}</td>
         `;
     }
+
+    // Update retry all button visibility
+    updateRetryAllButtonVisibility();
 }
 
 function addResultRow(r) {
@@ -2258,11 +2327,23 @@ function addResultRow(r) {
 
     if (r.error || !r.report) {
         row.classList.add('result-row-error');
+        row.onclick = null; // No modal for errors
+
+        // Store data for retry
+        row.dataset.symbol = r.symbol;
+        row.dataset.timeframe = r.timeframe;
+        row.dataset.options = JSON.stringify(r.options);
+
         row.innerHTML = `
             <td>${r.symbol}</td>
             <td>${r.timeframe}</td>
             <td><small>${formatOptions(r.options)}</small></td>
-            <td colspan="8" class="negative">${r.error || 'Unknown error (No report data)'}</td>
+            <td colspan="5" class="negative">${r.error || 'Unknown error (No report data)'}</td>
+            <td>
+                <button class="retry-btn" onclick="event.stopPropagation(); retryBacktest(this.closest('tr'))">
+                    🔄 ${i18n.t('buttons.retry')}
+                </button>
+            </td>
         `;
     } else {
         const netProfit = r.report.netProfit !== 'N/A' ? r.report.netProfit : null;
@@ -3091,6 +3172,7 @@ function renderFilteredResults() {
             </td>
         `;
         tbody.appendChild(row);
+        updateRetryAllButtonVisibility();
         return;
     }
 
@@ -3104,6 +3186,9 @@ function renderFilteredResults() {
     if (sortState.column !== null) {
         sortTable(sortState.column);
     }
+
+    // Update retry all button visibility
+    updateRetryAllButtonVisibility();
 }
 
 // Create a result row element (extracted from addResultRow for reusability)
@@ -3114,11 +3199,23 @@ function createResultRowElement(r, originalIndex) {
 
     if (r.error || !r.report) {
         row.classList.add('result-row-error');
+        row.onclick = null; // No modal for errors
+
+        // Store data for retry
+        row.dataset.symbol = r.symbol;
+        row.dataset.timeframe = r.timeframe;
+        row.dataset.options = JSON.stringify(r.options);
+
         row.innerHTML = `
             <td>${r.symbol}</td>
             <td>${r.timeframe}</td>
             <td><small>${formatOptions(r.options)}</small></td>
-            <td colspan="6" class="negative">${r.error || 'Unknown error (No report data)'}</td>
+            <td colspan="5" class="negative">${r.error || 'Unknown error (No report data)'}</td>
+            <td>
+                <button class="retry-btn" onclick="event.stopPropagation(); retryBacktest(this.closest('tr'))">
+                    🔄 ${i18n.t('buttons.retry')}
+                </button>
+            </td>
         `;
     } else {
         const netProfit = r.report.netProfit !== 'N/A' ? r.report.netProfit : null;

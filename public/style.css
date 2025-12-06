@@ -312,6 +312,18 @@ select:focus {
     border-color: rgba(255, 255, 255, 0.2);
 }
 
+.btn.warning {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: #fbbf24;
+}
+
+.btn.warning:hover {
+    background: rgba(245, 158, 11, 0.25);
+    border-color: rgba(245, 158, 11, 0.5);
+    transform: translateY(-1px);
+}
+
 .btn.large {
     width: 100%;
     font-size: 1.1rem;
