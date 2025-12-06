@@ -39,10 +39,6 @@ const historyModal = document.getElementById('historyModal');
 const closeHistoryBtn = document.getElementById('closeHistoryBtn');
 const historyTableBody = document.getElementById('historyTableBody');
 
-// Parallel connections input
-const parallelInput = document.getElementById('parallelInput');
-const badgeHint = document.getElementById('badgeHint');
-
 // LocalStorage helper functions
 function getSyncData() {
     try {
@@ -52,64 +48,6 @@ function getSyncData() {
         console.error('Error parsing sync data:', e);
         return null;
     }
-}
-
-// Default plan connections mapping
-// Conservative limits to avoid TradingView 429 rate limiting
-const DEFAULT_PLAN_CONNECTIONS = {
-    'Free': 1,
-    'Essential': 2,
-    'Plus': 4,
-    'Premium': 8,
-    'Ultimate': 15
-};
-
-// Get saved parallel value or default for account type
-function getSavedParallelValue() {
-    const saved = localStorage.getItem('parallelConnections');
-    return saved ? parseInt(saved, 10) : null;
-}
-
-// Save parallel value
-function saveParallelValue(value) {
-    localStorage.setItem('parallelConnections', value.toString());
-}
-
-// Get max connections for current account (uses saved value or default)
-function getMaxConnections(accountType) {
-    const saved = getSavedParallelValue();
-    if (saved && saved >= 1) {
-        return saved;
-    }
-    return DEFAULT_PLAN_CONNECTIONS[accountType] || DEFAULT_PLAN_CONNECTIONS['Free'] || 1;
-}
-
-// Get recommended value for account type
-function getRecommendedConnections(accountType) {
-    return DEFAULT_PLAN_CONNECTIONS[accountType] || 1;
-}
-
-// Update account badge display
-function updateAccountBadge(accountType) {
-    const badge = document.getElementById('accountBadge');
-    if (!badge) return;
-    
-    const planSpan = badge.querySelector('.badge-plan');
-    
-    // Always show badge (even for Free accounts, so user can adjust parallel value)
-    const recommended = getRecommendedConnections(accountType || 'Free');
-    const currentValue = getSavedParallelValue() || recommended;
-    
-    if (planSpan) planSpan.textContent = accountType || 'Free';
-    if (parallelInput) {
-        parallelInput.value = currentValue;
-        parallelInput.max = Math.max(50, recommended * 3); // Allow up to 3x recommended or 50
-    }
-    if (badgeHint) {
-        badgeHint.textContent = i18n.t('tooltips.recommended', { recommended });
-    }
-    
-    badge.classList.remove('hidden');
 }
 
 function getSettings() {
@@ -132,26 +70,6 @@ function updateStatus(message, type = 'info') {
     statusMessage.className = `status-message ${type}`;
 }
 
-// Show 429 rate limit warning
-function showRateLimitWarning() {
-    const syncData = getSyncData();
-    const accountType = syncData?.accountType || 'Free';
-    const recommended = getRecommendedConnections(accountType);
-    
-    // Flash the badge and hint to draw attention
-    const badge = document.getElementById('accountBadge');
-    if (badge) {
-        badge.classList.add('rate-limit-error');
-        setTimeout(() => badge.classList.remove('rate-limit-error'), 3000);
-    }
-    
-    // Update status with helpful message
-    updateStatus(
-        i18n.t('errors.rateLimitWarning', { recommended, accountType }),
-        'error'
-    );
-}
-
 // Event Listeners
 historyBtn.addEventListener('click', openHistoryModal);
 closeHistoryBtn.addEventListener('click', () => historyModal.classList.add('hidden'));
@@ -163,17 +81,6 @@ reloadPreviousSettingsBtn.addEventListener('click', () => {
         loadIndicatorWithLocalValues(window.currentIndicatorObj);
     }
 });
-
-// Parallel input listener - save on change
-if (parallelInput) {
-    parallelInput.addEventListener('change', () => {
-        const value = parseInt(parallelInput.value, 10);
-        if (!isNaN(value) && value >= 1) {
-            saveParallelValue(value);
-            console.log('💾 Saved parallel connections:', value);
-        }
-    });
-}
 
 addSymbolBtn.addEventListener('click', handleAddSymbol);
 newSymbolInput.addEventListener('keypress', (e) => {
@@ -236,6 +143,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Check for active job to restore
     checkActiveJob();
 
+    // Check for share parameter in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const shareToken = urlParams.get('share');
+    if (shareToken) {
+        // Hide history button for shared view
+        const historyBtn = document.getElementById('historyBtn');
+        if (historyBtn) historyBtn.classList.add('hidden');
+        loadSharedJob(shareToken);
+    }
+
     // Listen for sync data from content script (postMessage)
     window.addEventListener('message', (event) => {
         if (event.data && event.data.type === 'TV_BACKTEST_SYNC_DATA') {
@@ -283,14 +200,6 @@ function autoLoadFromSync(syncData) {
     localStorage.setItem('tvBacktestSyncData', JSON.stringify(syncData));
 
     console.log('🚀 Auto-loading from sync data:', JSON.stringify(syncData, null, 2));
-
-    // Update account badge if account type is available
-    if (syncData.accountType) {
-        updateAccountBadge(syncData.accountType);
-        console.log(`👤 Account type: ${syncData.accountType}`);
-    } else {
-        console.warn('⚠️ No accountType in syncData');
-    }
 
     // Ensure step1 is visible when syncing from extension
     const step1 = document.getElementById('step1');
@@ -583,6 +492,91 @@ async function loadJobWithStreaming(jobId) {
     });
 }
 
+// Load shared job from token (for /?share=TOKEN URLs)
+async function loadSharedJob(token) {
+    // Hide step1 and step2 for shared view
+    const step1 = document.getElementById('step1');
+    const step2 = document.getElementById('step2');
+    if (step1) step1.classList.add('hidden');
+    if (step2) step2.classList.add('hidden');
+
+    // Show step3 and set loading state
+    step3.classList.remove('hidden');
+    statusMessage.textContent = i18n.t('messages.loadingSharedJob');
+    statusMessage.className = 'status-message info';
+    resultsTableBody.innerHTML = '';
+
+    return new Promise((resolve, reject) => {
+        const eventSource = new EventSource(`/api/shared/${token}/stream`);
+        let allResults = [];
+
+        eventSource.addEventListener('metadata', (event) => {
+            try {
+                const metadata = JSON.parse(event.data);
+                state.results = [];
+
+                if (metadata.totalResults > 0) {
+                    statusMessage.textContent = i18n.t('messages.loadingResults', { progress: 0, total: metadata.totalResults });
+                } else {
+                    statusMessage.textContent = i18n.t('messages.jobLoadedNoResults');
+                }
+
+                // Update page title for shared view
+                document.title = `Shared Results - TradingView Backtester`;
+            } catch (e) {
+                console.error('Error parsing shared metadata:', e);
+            }
+        });
+
+        eventSource.addEventListener('results', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+
+                data.batch.forEach(result => {
+                    state.results.push(result);
+                    allResults.push(result);
+                    addResultRow(result);
+                });
+
+                statusMessage.textContent = i18n.t('messages.loadingResults', { progress: data.progress, total: data.total });
+            } catch (e) {
+                console.error('Error parsing shared results:', e);
+            }
+        });
+
+        eventSource.addEventListener('complete', () => {
+            eventSource.close();
+            statusMessage.textContent = i18n.t('messages.sharedJobLoaded', { count: allResults.length });
+            statusMessage.style.color = '#4CAF50';
+
+            // Initialize filters after loading
+            initializeFilters();
+
+            resolve();
+        });
+
+        eventSource.addEventListener('error', (event) => {
+            eventSource.close();
+            try {
+                const data = JSON.parse(event.data);
+                statusMessage.textContent = data.message || i18n.t('messages.shareExpired');
+                statusMessage.className = 'status-message error';
+            } catch (e) {
+                statusMessage.textContent = i18n.t('messages.shareExpired');
+                statusMessage.className = 'status-message error';
+            }
+            reject(new Error('Failed to load shared job'));
+        });
+
+        eventSource.onerror = () => {
+            eventSource.close();
+            statusMessage.textContent = i18n.t('messages.shareError');
+            statusMessage.className = 'status-message error';
+            reject(new Error('Connection lost'));
+        };
+    });
+}
+
 // Helper function to restore job config (extracted from restoreJob)
 function restoreJobConfig(cfg) {
     // Restore Indicator ID
@@ -791,11 +785,6 @@ function connectWebSocket(jobId) {
         } else if (msg.type === 'result') {
             state.results.push(msg.data);
             updateRowWithResult(msg.data);
-            
-            // Check if result contains a 429 error - show special warning
-            if (msg.data.error && msg.data.error.includes('429')) {
-                showRateLimitWarning();
-            }
         } else if (msg.type === 'retrying') {
             // Update the specific row to show retry status (orange)
             updateRowWithRetrying(msg.data);
@@ -817,10 +806,6 @@ function connectWebSocket(jobId) {
             resetButtons();
             ws.close();
         } else if (msg.type === 'error') {
-            // Check if error is rate limit (429)
-            if (msg.message && msg.message.includes('429')) {
-                showRateLimitWarning();
-            }
             statusMessage.textContent = '❌ ' + i18n.t('errors.generic', { message: msg.message });
             statusMessage.style.color = '#ff4444';
             resetButtons();
@@ -1053,18 +1038,6 @@ async function runBacktest() {
     }
 
     try {
-        // Get account type from sync data
-        const accountType = syncData ? (syncData.accountType || 'Free') : 'Free';
-        // Get parallel value from input or use saved/default
-        const maxParallelConnections = parallelInput ? parseInt(parallelInput.value, 10) : getMaxConnections(accountType);
-        
-        // Save the value for next time
-        if (parallelInput && !isNaN(maxParallelConnections)) {
-            saveParallelValue(maxParallelConnections);
-        }
-        
-        console.log('📊 Starting backtest with accountType:', accountType, 'maxParallel:', maxParallelConnections);
-        
         const response = await fetch('/api/backtest', {
             method: 'POST',
             headers: {
@@ -1074,16 +1047,12 @@ async function runBacktest() {
                 indicatorId: state.indicatorId,
                 symbols: state.symbols,
                 timeframes: selectedTimeframes,
-                // Send pre-generated combinations instead of raw options/ranges
                 combinations: optionCombinations,
-                // Still send ranges for UI/logging purposes if needed, but logic is done
                 ranges: state.ranges,
                 dateFrom: dateFromInput.value,
                 dateTo: dateToInput.value,
-                session: session, // Include session
-                signature: signature, // Include signature
-                accountType: accountType, // Include account type for parallel execution
-                maxParallelConnections: maxParallelConnections // User-configured limit
+                session: session,
+                signature: signature
             })
         });
 
@@ -2765,22 +2734,21 @@ async function shareJob(jobId) {
         }
 
         const shareData = await response.json();
-        
-        // Build full URL
+
+        // Build full viewable URL
         const baseUrl = window.location.origin;
-        const shareUrl = `${baseUrl}${shareData.downloadUrl}`;
+        const shareUrl = `${baseUrl}${shareData.viewUrl}`;
         
         // Copy to clipboard
         try {
             await navigator.clipboard.writeText(shareUrl);
             updateStatus('✅ ' + i18n.t('messages.shareLinkCopied', { date: new Date(shareData.expiresAt).toLocaleDateString() }), 'success');
+            setTimeout(() => statusMessage.textContent = '', 5000);
         } catch (e) {
-            // Fallback: show in prompt
-            prompt(i18n.t('messages.shareLinkPrompt'), shareUrl);
-            updateStatus('✅ ' + i18n.t('messages.shareLinkCreated', { date: new Date(shareData.expiresAt).toLocaleDateString() }), 'success');
+            // If clipboard API fails, show error
+            console.error('Clipboard API failed:', e);
+            updateStatus('❌ Failed to copy link. Please copy manually: ' + shareUrl, 'error');
         }
-        
-        setTimeout(() => statusMessage.textContent = '', 5000);
 
     } catch (error) {
         console.error('Share job error:', error);
@@ -2898,7 +2866,8 @@ function initializeFilters() {
     // Show toggle button only when we have results
     if (state.results && state.results.length > 0) {
         toggleFiltersBtn.classList.remove('hidden');
-        filtersPanel.classList.remove('hidden');
+        // Keep filters panel hidden by default
+        filtersPanel.classList.add('hidden');
     } else {
         toggleFiltersBtn.classList.add('hidden');
         filtersPanel.classList.add('hidden');
@@ -3244,10 +3213,10 @@ function toggleFiltersPanel() {
 
     if (filtersPanel.classList.contains('hidden')) {
         filtersPanel.classList.remove('hidden');
-        if (toggleBtn) toggleBtn.textContent = '🔍 ' + i18n.t('buttons.hideFilters');
+        if (toggleBtn) toggleBtn.textContent = i18n.t('buttons.hideFilters');
     } else {
         filtersPanel.classList.add('hidden');
-        if (toggleBtn) toggleBtn.textContent = '🔍 ' + i18n.t('buttons.showFilters');
+        if (toggleBtn) toggleBtn.textContent = i18n.t('buttons.showFilters');
     }
 }
 

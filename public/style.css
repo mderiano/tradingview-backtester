@@ -837,32 +837,6 @@ input:checked+.slider:before {
     margin-left: 1rem;
 }
 
-/* Account Badge */
-.account-badge {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    background: rgba(99, 102, 241, 0.15);
-    border: 1px solid rgba(99, 102, 241, 0.3);
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
-    font-size: 0.85rem;
-}
-
-.badge-icon {
-    font-size: 1rem;
-}
-
-.badge-plan {
-    font-weight: 600;
-    color: #a5b4fc;
-}
-
-.badge-connections {
-    color: var(--text-secondary);
-    font-size: 0.8rem;
-}
-
 /* Period Warning */
 .period-warning {
     display: flex;
@@ -1381,77 +1355,6 @@ tbody tr:last-child td {
     height: 1px;
     background: linear-gradient(to right, transparent, rgba(255, 255, 255, 0.1), transparent);
     margin: 2.5rem 0;
-}
-
-/* Account Badge with editable parallel input */
-.account-badge {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    background: rgba(99, 102, 241, 0.15);
-    border: 1px solid rgba(99, 102, 241, 0.3);
-    border-radius: 8px;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.9rem;
-    transition: all 0.3s ease;
-}
-
-.account-badge.rate-limit-error {
-    background: rgba(239, 68, 68, 0.25);
-    border-color: rgba(239, 68, 68, 0.5);
-    animation: shake 0.5s ease-in-out;
-}
-
-@keyframes shake {
-    0%, 100% { transform: translateX(0); }
-    25% { transform: translateX(-5px); }
-    75% { transform: translateX(5px); }
-}
-
-.badge-icon {
-    font-size: 1.1rem;
-}
-
-.badge-plan {
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
-.badge-connections {
-    color: var(--text-secondary);
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-}
-
-.badge-connections input[type="number"] {
-    width: 45px;
-    padding: 0.25rem 0.4rem;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 4px;
-    color: var(--text-primary);
-    font-size: 0.85rem;
-    text-align: center;
-    -moz-appearance: textfield;
-}
-
-.badge-connections input[type="number"]::-webkit-outer-spin-button,
-.badge-connections input[type="number"]::-webkit-inner-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-}
-
-.badge-connections input[type="number"]:focus {
-    outline: none;
-    border-color: var(--accent-color);
-    background: rgba(255, 255, 255, 0.15);
-}
-
-.badge-hint {
-    color: var(--text-secondary);
-    font-size: 0.75rem;
-    opacity: 0.8;
 }
 
 /* Import/Export Button Groups */

@@ -43,21 +43,8 @@ let pLimit;
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// TradingView plan to parallel connections mapping
-// Using conservative limits to avoid 429 rate limiting
-// These are default values - client can override with custom settings
-const PLAN_CONNECTIONS = {
-    'Free': 1,
-    'Essential': 2,
-    'Plus': 4,
-    'Premium': 8,
-    'Ultimate': 15
-};
-
-// Get max parallel connections for a plan
-function getMaxConnections(accountType) {
-    return PLAN_CONNECTIONS[accountType] || PLAN_CONNECTIONS['Free'];
-}
+// Get max parallel connections from environment (single value for all users)
+const MAX_PARALLEL_CONNECTIONS = parseInt(process.env.MAX_PARALLEL_CONNECTIONS || '1');
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -72,6 +59,33 @@ const jobs = new Map();
 const RESULTS_DIR = path.join(__dirname, 'results');
 if (!fs.existsSync(RESULTS_DIR)) {
     fs.mkdirSync(RESULTS_DIR, { recursive: true });
+}
+
+// Share tokens persistent storage
+const SHARE_TOKENS_FILE = path.join(RESULTS_DIR, 'share-tokens.json');
+
+// Load share tokens from disk
+function loadShareTokens() {
+    try {
+        if (fs.existsSync(SHARE_TOKENS_FILE)) {
+            const data = fs.readFileSync(SHARE_TOKENS_FILE, 'utf8');
+            const parsed = JSON.parse(data);
+            return new Map(Object.entries(parsed));
+        }
+    } catch (e) {
+        console.error('Error loading share tokens:', e);
+    }
+    return new Map();
+}
+
+// Save share tokens to disk
+function saveShareTokens(tokensMap) {
+    try {
+        const obj = Object.fromEntries(tokensMap);
+        fs.writeFileSync(SHARE_TOKENS_FILE, JSON.stringify(obj, null, 2));
+    } catch (e) {
+        console.error('Error saving share tokens:', e);
+    }
 }
 
 // Generate a short hash from session ID for directory naming
@@ -156,7 +170,6 @@ function saveJobMeta(jobId) {
         config: job.config,
         startTime: job.startTime,
         session: job.session,
-        accountType: job.accountType,
         maxParallelConnections: job.maxParallelConnections,
         resultCount: job.resultCount || 0,
         error: job.error
@@ -813,19 +826,19 @@ async function runSingleBacktest({ symbol, timeframe, combo, dateFrom, dateTo, i
 }
 
 // Async Backtest Runner with Parallel Execution (Incremental Save)
-async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timeframes, dateFrom, dateTo, session, signature, accountType, maxParallelConnections }) {
+async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timeframes, dateFrom, dateTo, session, signature, maxParallelConnections }) {
     const job = jobs.get(jobId);
-    
+
     // Wait a bit for WebSocket client to connect before starting
     // This ensures the frontend receives all pending/running status updates
     await delay(500);
-    
+
     job.status = 'running';
     job.resultCount = 0; // Track saved results count instead of array
     saveJobMeta(jobId);
     broadcast(jobId, { type: 'status', status: 'running' });
-    
-    console.log(`Job ${jobId}: Account type: ${accountType}, Max parallel connections: ${maxParallelConnections}`);
+
+    console.log(`Job ${jobId}: Max parallel connections: ${maxParallelConnections}`);
 
     try {
         const optionCombinations = combinations;
@@ -1041,33 +1054,31 @@ async function runBacktestJob(jobId, { indicatorId, combinations, symbols, timef
 // API: Start Backtest (Async)
 app.post('/api/backtest', (req, res) => {
     try {
-        const { indicatorId, combinations, ranges, symbols, timeframes, dateFrom, dateTo, session, signature, accountType, maxParallelConnections: clientMaxConnections } = req.body;
+        const { indicatorId, combinations, ranges, symbols, timeframes, dateFrom, dateTo, session, signature } = req.body;
 
         if (!session || !signature) {
             return res.status(401).json({ error: 'Missing TradingView credentials' });
         }
 
-        // Use client-provided limit or fall back to server defaults
-        const validAccountType = PLAN_CONNECTIONS[accountType] ? accountType : 'Free';
-        const maxParallelConnections = clientMaxConnections || getMaxConnections(validAccountType);
-        
-        console.log(`📊 New backtest: Account type: ${validAccountType}, Max parallel: ${maxParallelConnections} (client requested: ${clientMaxConnections || 'default'})`);
+        // Use server-configured parallel connections (from .env)
+        const maxParallelConnections = MAX_PARALLEL_CONNECTIONS;
+
+        console.log(`📊 New backtest: Max parallel: ${maxParallelConnections}`);
 
         const jobId = crypto.randomUUID();
         jobs.set(jobId, {
             id: jobId,
             status: 'pending',
             config: { indicatorId, combinations, ranges, symbols, timeframes, dateFrom, dateTo },
-            resultCount: 0, // Track count instead of array
+            resultCount: 0,
             startTime: Date.now(),
-            session: session, // Save session to filter history later
-            accountType: validAccountType,
+            session: session,
             maxParallelConnections: maxParallelConnections
         });
 
         // Start job in background
-        saveJobMeta(jobId); // Save pending state
-        runBacktestJob(jobId, { indicatorId, combinations, symbols, timeframes, dateFrom, dateTo, session, signature, accountType: validAccountType, maxParallelConnections });
+        saveJobMeta(jobId);
+        runBacktestJob(jobId, { indicatorId, combinations, symbols, timeframes, dateFrom, dateTo, session, signature, maxParallelConnections });
 
         res.json({ id: jobId, message: 'Backtest started' });
 
@@ -1513,8 +1524,8 @@ app.get('/api/jobs/:id/size', async (req, res) => {
 });
 
 // API: Stream export job to Excel (for large datasets)
-// Store for share tokens (in production, use Redis or database)
-const shareTokens = new Map();
+// Load share tokens from persistent storage
+const shareTokens = loadShareTokens();
 
 // API: Create share link for a job
 app.post('/api/jobs/:id/share', async (req, res) => {
@@ -1538,14 +1549,16 @@ app.post('/api/jobs/:id/share', async (req, res) => {
             createdAt: Date.now(),
             expiresAt: expiresAt
         });
-        
+
+        // Save to persistent storage
+        saveShareTokens(shareTokens);
+
         console.log(`🔗 Created share link for job ${id}: token ${token.substring(0, 8)}...`);
-        
+
         res.json({
             token,
             expiresAt: new Date(expiresAt).toISOString(),
-            downloadUrl: `/api/shared/${token}/download`,
-            viewUrl: `/api/shared/${token}`
+            viewUrl: `/?share=${token}`
         });
     } catch (error) {
         console.error('Share link error:', error);
@@ -1553,35 +1566,103 @@ app.post('/api/jobs/:id/share', async (req, res) => {
     }
 });
 
-// API: Get shared job info
+// API: Get shared job info (redirect to web view)
 app.get('/api/shared/:token', async (req, res) => {
     const { token } = req.params;
-    
+
+    const shareInfo = shareTokens.get(token);
+    if (!shareInfo) {
+        return res.status(404).send('Share link not found or expired');
+    }
+
+    // Check expiration
+    if (Date.now() > shareInfo.expiresAt) {
+        shareTokens.delete(token);
+        saveShareTokens(shareTokens);
+        return res.status(410).send('Share link has expired');
+    }
+
+    // Redirect to web view
+    res.redirect(`/?share=${token}`);
+});
+
+// API: Stream shared job results (SSE for viewing in-app)
+app.get('/api/shared/:token/stream', async (req, res) => {
+    const { token } = req.params;
+
     const shareInfo = shareTokens.get(token);
     if (!shareInfo) {
         return res.status(404).json({ error: 'Share link not found or expired' });
     }
-    
+
     // Check expiration
     if (Date.now() > shareInfo.expiresAt) {
         shareTokens.delete(token);
+        saveShareTokens(shareTokens);
         return res.status(410).json({ error: 'Share link has expired' });
     }
-    
+
+    const { session, jobId } = shareInfo;
+
+    // Set up SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const sendEvent = (event, data) => {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
     try {
-        const meta = await loadJobMeta(shareInfo.session, shareInfo.jobId);
-        const resultIndices = listJobResultFiles(shareInfo.session, shareInfo.jobId);
-        
-        res.json({
-            jobId: shareInfo.jobId,
+        const meta = await loadJobMeta(session, jobId);
+        const resultIndices = listJobResultFiles(session, jobId);
+        const totalResults = resultIndices.length;
+
+        console.log(`🔗 Streaming shared job ${jobId}: ${totalResults} results`);
+
+        // Send metadata
+        sendEvent('metadata', {
+            id: meta.id,
             status: meta.status,
             config: meta.config,
-            resultCount: resultIndices.length,
-            createdAt: meta.startTime,
-            expiresAt: new Date(shareInfo.expiresAt).toISOString()
+            startTime: meta.startTime,
+            totalResults: totalResults,
+            isShared: true
         });
+
+        // Stream results in batches
+        if (totalResults > 0) {
+            const BATCH_SIZE = 50;
+            for (let i = 0; i < totalResults; i += BATCH_SIZE) {
+                const batch = [];
+                const end = Math.min(i + BATCH_SIZE, totalResults);
+
+                for (let j = i; j < end; j++) {
+                    const resultIndex = resultIndices[j];
+                    try {
+                        const result = await loadResult(session, jobId, resultIndex);
+                        batch.push(result);
+                    } catch (e) {
+                        console.error(`Failed to load shared result ${resultIndex}:`, e);
+                    }
+                }
+
+                if (batch.length > 0) {
+                    sendEvent('results', { batch, progress: end, total: totalResults });
+                }
+
+                await new Promise(resolve => setImmediate(resolve));
+            }
+        }
+
+        sendEvent('complete', { success: true });
+        res.end();
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error(`Error streaming shared job ${jobId}:`, error);
+        sendEvent('error', { message: error.message });
+        res.end();
     }
 });
 
@@ -1597,6 +1678,7 @@ app.get('/api/shared/:token/download', async (req, res) => {
     // Check expiration
     if (Date.now() > shareInfo.expiresAt) {
         shareTokens.delete(token);
+        saveShareTokens(shareTokens);
         return res.status(410).json({ error: 'Share link has expired' });
     }
     
