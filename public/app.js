@@ -330,8 +330,8 @@ function renderHistory(jobs) {
             <td>${job.symbolCount || 0}</td>
             <td class="actions-cell">
                 <button class="btn small primary load-job-btn" data-job-id="${job.id}">${i18n.t('buttons.load')}</button>
-                <button class="btn small secondary export-json-btn" data-job-id="${job.id}">📥 Export</button>
-                <button class="btn small secondary share-job-btn" data-job-id="${job.id}">🔗 Share</button>
+                <button class="btn small secondary export-json-btn" data-job-id="${job.id}">${i18n.t('buttons.exportHistory')}</button>
+                <button class="btn small secondary share-job-btn" data-job-id="${job.id}">${i18n.t('buttons.share')}</button>
             </td>
         `;
 
