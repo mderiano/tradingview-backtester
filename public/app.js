@@ -12,7 +12,8 @@ const state = {
         groups: [],
         inputs: {}
     },
-    activeTab: 'Inputs'  // Track current active tab
+    activeTab: 'Inputs',  // Track current active tab
+    isAdmin: false  // Track admin status
 };
 
 // DOM Elements
@@ -62,6 +63,38 @@ function getSettings() {
 
 function getCurrentJobId() {
     return localStorage.getItem('currentJobId');
+}
+
+// Check if current user is admin and show export/import buttons
+async function checkAdminStatus() {
+    try {
+        const syncData = getSyncData();
+        const session = syncData?.session || '';
+
+        const response = await fetch('/api/is-admin', {
+            headers: { 'X-Session-ID': session }
+        });
+        const { isAdmin } = await response.json();
+
+        state.isAdmin = isAdmin;
+
+        if (isAdmin) {
+            // Show all export/import buttons
+            const buttons = [
+                'exportSettingsBtn',
+                'importSettingsBtn',
+                'exportResultsJSONBtn',
+                'importResultsBtn'
+            ];
+            buttons.forEach(btnId => {
+                const btn = document.getElementById(btnId);
+                if (btn) btn.style.display = '';
+            });
+            console.log('🔑 Admin access granted');
+        }
+    } catch (e) {
+        console.error('Admin check failed:', e);
+    }
 }
 
 // Status message helper
@@ -123,6 +156,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             currentLangText.textContent = newLang.toUpperCase();
         });
     }
+
+    // Check if user is admin and show export/import buttons
+    await checkAdminStatus();
 
     initializeDateInputs();
     loadSettings();
@@ -330,7 +366,7 @@ function renderHistory(jobs) {
             <td>${job.symbolCount || 0}</td>
             <td class="actions-cell">
                 <button class="btn small primary load-job-btn" data-job-id="${job.id}">${i18n.t('buttons.load')}</button>
-                <button class="btn small secondary export-json-btn" data-job-id="${job.id}">${i18n.t('buttons.exportHistory')}</button>
+                <button class="btn small secondary export-json-btn" data-job-id="${job.id}" style="${state.isAdmin ? '' : 'display:none'}">${i18n.t('buttons.exportHistory')}</button>
                 <button class="btn small secondary share-job-btn" data-job-id="${job.id}">${i18n.t('buttons.share')}</button>
             </td>
         `;

@@ -142,10 +142,10 @@
                 <div class="settings-toolbar" style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-bottom: 0.5rem; padding: 0.5rem; background: rgba(255, 255, 255, 0.02); border-radius: 8px;">
                     <button id="reloadPreviousSettingsBtn" class="btn secondary small hidden"
                         data-i18n="buttons.reload" data-i18n-title="tooltips.reloadSettings" title="Reload previous settings for this indicator">🔄 Reload</button>
-                    <button id="exportSettingsBtn" class="btn secondary small" data-i18n="buttons.export" data-i18n-title="tooltips.exportSettings" title="Export current settings to JSON file">
+                    <button id="exportSettingsBtn" class="btn secondary small" data-i18n="buttons.export" data-i18n-title="tooltips.exportSettings" title="Export current settings to JSON file" style="display:none">
                         📥 Export
                     </button>
-                    <button id="importSettingsBtn" class="btn secondary small" data-i18n="buttons.import" data-i18n-title="tooltips.importSettings" title="Import settings from JSON file">
+                    <button id="importSettingsBtn" class="btn secondary small" data-i18n="buttons.import" data-i18n-title="tooltips.importSettings" title="Import settings from JSON file" style="display:none">
                         📤 Import
                     </button>
                     <input type="file" id="importSettingsFile" accept=".json" style="display: none;">
@@ -187,7 +187,7 @@
                     <div class="results-io-group" style="display: flex; gap: 0.5rem;">
                         <button id="retryAllFailedBtn" class="btn warning small hidden" data-i18n="buttons.retryAll">🔄 Retry All</button>
                         <button id="toggleFiltersBtn" class="btn secondary small hidden" data-i18n="buttons.toggleFilters">🔍 Filters</button>
-                        <button id="exportResultsJSONBtn" class="btn secondary small">📥 Export</button>
+                        <button id="exportResultsJSONBtn" class="btn secondary small" style="display:none">📥 Export</button>
                     </div>
                 </div>
 
@@ -363,7 +363,7 @@
             <div class="modal-header">
                 <h2 data-i18n="modal.historyTitle">Backtest History</h2>
                 <div style="display: flex; gap: 0.5rem; align-items: center;">
-                    <button id="importResultsBtn" class="btn secondary small" data-i18n="buttons.importResults">📤 Import Results</button>
+                    <button id="importResultsBtn" class="btn secondary small" data-i18n="buttons.importResults" style="display:none">📤 Import Results</button>
                     <input type="file" id="importResultsFile" accept=".zip" style="display: none;">
                     <button class="close-btn" id="closeHistoryBtn">&times;</button>
                 </div>

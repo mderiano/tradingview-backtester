@@ -1392,7 +1392,7 @@ tbody tr:last-child td {
 .history-table .actions-cell {
     display: flex;
     gap: 0.3rem;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     justify-content: center;
 }
 

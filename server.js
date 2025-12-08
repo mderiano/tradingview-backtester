@@ -1803,6 +1803,22 @@ app.post('/api/retry-backtest', async (req, res) => {
     }
 });
 
+// API: Get current session hash (for admin setup)
+app.get('/api/session-info', (req, res) => {
+    const session = req.headers['x-session-id'] || req.query.session;
+    const hash = getSessionHash(session);
+    res.json({ sessionHash: hash });
+});
+
+// API: Check if current user is admin
+app.get('/api/is-admin', (req, res) => {
+    const session = req.headers['x-session-id'] || req.query.session;
+    const sessionHash = getSessionHash(session);
+    const adminHash = process.env.ADMIN_SESSION_HASH;
+    const isAdmin = adminHash && sessionHash === adminHash;
+    res.json({ isAdmin });
+});
+
 // Start server
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
