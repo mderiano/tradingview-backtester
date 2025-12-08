@@ -2819,17 +2819,42 @@ async function shareJob(jobId) {
         // Build full viewable URL
         const baseUrl = window.location.origin;
         const shareUrl = `${baseUrl}${shareData.viewUrl}`;
-        
-        // Copy to clipboard
+
+        // Copy to clipboard with fallback
+        let copied = false;
         try {
-            await navigator.clipboard.writeText(shareUrl);
-            updateStatus('✅ ' + i18n.t('messages.shareLinkCopied', { date: new Date(shareData.expiresAt).toLocaleDateString() }), 'success');
-            setTimeout(() => statusMessage.textContent = '', 5000);
+            // Try modern clipboard API first
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(shareUrl);
+                copied = true;
+            } else {
+                // Fallback for older browsers or HTTP
+                const textarea = document.createElement('textarea');
+                textarea.value = shareUrl;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                try {
+                    copied = document.execCommand('copy');
+                } catch (err) {
+                    console.error('execCommand copy failed:', err);
+                }
+                document.body.removeChild(textarea);
+            }
         } catch (e) {
-            // If clipboard API fails, show error
-            console.error('Clipboard API failed:', e);
-            updateStatus('❌ Failed to copy link. Please copy manually: ' + shareUrl, 'error');
+            console.error('Clipboard copy failed:', e);
         }
+
+        // Show message with the link
+        if (copied) {
+            updateStatus('✅ ' + i18n.t('messages.shareLinkCopied', { date: new Date(shareData.expiresAt).toLocaleDateString() }) + ' - ' + shareUrl, 'success');
+        } else {
+            updateStatus('🔗 ' + i18n.t('messages.shareLinkCreated', { date: new Date(shareData.expiresAt).toLocaleDateString() }) + ' - ' + shareUrl, 'info');
+        }
+
+        // Keep message visible longer
+        setTimeout(() => statusMessage.textContent = '', 10000);
 
     } catch (error) {
         console.error('Share job error:', error);
