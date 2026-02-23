@@ -9,7 +9,7 @@
     "postinstall": "patch-package"
   },
   "dependencies": {
-    "@mathieuc/tradingview": "github:nick-kilian/TradingView-API#e418837f0a3759a13e50a4a5c64e351bceab5158",
+    "@mathieuc/tradingview": "^3.5.2",
     "archiver": "^7.0.1",
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
